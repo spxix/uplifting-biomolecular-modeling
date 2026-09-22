@@ -305,6 +305,12 @@ def _one_sample(sc, configs, hx: HostIndex, pae_logits, plddt_logits, pde_logits
     summary.update(_chain_based_gpde(hx, full_data["token_pair_pde"], full_data["contact_probs"]))
     summary.update(_chain_based_ptm(hx, pae_prob, token_asym_id))
     summary.update(_chain_based_plddt(hx, full_data["atom_plddt"]))
+    # ByteDance 4c355be adds these fields; use its implementation and operands.
+    if hasattr(sc, "calculate_chain_pair_pae"):
+        summary.update(sc.calculate_chain_pair_pae(
+            token_pair_pae=full_data["token_pair_pae"], asym_id=token_asym_id,
+            token_has_frame=token_has_frame,
+        ))
     del pae_prob
     summary["has_clash"] = _clash(hx, atom_coordinate, configs.metrics.clash.af3_clash_threshold)
     summary["num_recycles"] = torch.tensor(N_recycle, device=atom_coordinate.device)

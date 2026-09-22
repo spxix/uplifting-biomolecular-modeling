@@ -17,3 +17,16 @@ validated against their frozen upstream coordinate references on H20.
 This is a hardware compatibility adapter, not a new optimization profile.
 Model/service activation remains the consumer's responsibility. InsFold model
 extensions and checkpoint-specific policies do not belong in this adapter.
+
+## Protenix upstream 4c355be
+
+The host-indexed confidence summary also calls upstream's
+`calculate_chain_pair_pae` when present, preserving its new mean/min fields.
+The original 2475421 wheel pin remains the release provenance, not the identity
+of a downstream source-built model. Consumers pin their own model source.
+
+`LAYERNORM_TYPE=torch` under exact keeps the model's normalization calls.
+MK-PF, CUDA prologue and XL block fusion that emulate fast LayerNorm are disabled
+and recorded in the activation report. Other exact optimizations remain enabled.
+Conflicting fusion overrides and unverified fast/big + Torch combinations fail
+explicitly. The default fast_layernorm release modes are unchanged.

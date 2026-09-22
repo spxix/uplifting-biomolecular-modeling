@@ -298,6 +298,23 @@ def source_env_sh(fpf_home: str, arm: str, environ: Mapping[str, str]) -> Tuple[
     return before, after, spec.strip()
 
 
+def layernorm_overrides(mode, environ):
+    """Keep exact's fused prologues from replacing a requested Torch LayerNorm."""
+    norm = environ.get("LAYERNORM_TYPE", "fast_layernorm")
+    if norm not in ("fast_layernorm", "torch"):
+        raise ValueError("LAYERNORM_TYPE must be fast_layernorm or torch")
+    if norm != "torch" or mode == "off":
+        return {}
+    if mode != "exact":
+        raise ValueError("Torch LayerNorm is validated only for off/exact")
+    overrides = {"PTX_MK_PF": "0", "PTX_TRIATT_PROCUDA": "0",
+                 "PTX_BLOCKFUSE_XL": "0", "PTX_BLK_LN": "stock"}
+    for key, value in overrides.items():
+        if key in environ and environ[key] != value:
+            raise ValueError(f"LAYERNORM_TYPE=torch conflicts with {key}={environ[key]}")
+    return overrides
+
+
 def resolve(mode: str, environ: Optional[Mapping[str, str]], fpf_home: str, *, compute_cap: Optional[str] = None,
             triton: Optional[str] = None, memory_mib: Optional[int] = None, probe_gpu: bool = True, skip_pre=(), pre_override=None) -> Resolution:
     """The environment a mode materialises on top of `environ`: the kit README row for this box's kernel key (pre exports) and the
@@ -308,6 +325,8 @@ def resolve(mode: str, environ: Optional[Mapping[str, str]], fpf_home: str, *, c
     `compute_cap`/`triton`/`memory_mib` override the device probes (tests). `pre_override`: pre words to export in their place ({switch: word}: the replaced lever's word an ablation restores). `skip_pre`: README-row / package pre exports NOT to set (the
     ablation of a lever whose switch env.sh reads: env.sh is sourced without it, so its own default word stands). "off" resolves to nothing."""
     environ = dict(os.environ if environ is None else environ)
+    norm_overrides = layernorm_overrides(mode, environ)
+    environ.update(norm_overrides)
     res = Resolution(mode=mode, exports={}, unsets=[])
     if mode == "off":
         return res
@@ -354,4 +373,7 @@ def resolve(mode: str, environ: Optional[Mapping[str, str]], fpf_home: str, *, c
     for k, v in res.extras.items():
         if environ.get(k) != v:
             res.exports[k] = v
+    res.exports.update(norm_overrides)
+    if norm_overrides:
+        res.notes.append("Torch LayerNorm: retain module normalization; disable fast-LN-only MK-PF/prologue/XL fusion")
     return res
