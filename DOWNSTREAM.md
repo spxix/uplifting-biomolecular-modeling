@@ -30,3 +30,9 @@ MK-PF, CUDA prologue and XL block fusion that emulate fast LayerNorm are disable
 and recorded in the activation report. Other exact optimizations remain enabled.
 Conflicting fusion overrides and unverified fast/big + Torch combinations fail
 explicitly. The default fast_layernorm release modes are unchanged.
+
+Sampler graph warmup waits for the current stream after creating `x0_keep` and
+binding hoist buffers. Waiting before the clone did not order its producer with
+the side-stream copy, allowing the first sample of a new shape to read stale
+data under GPU contention. This change adds the missing stream dependency; it
+does not change the sampler math or consume random numbers.

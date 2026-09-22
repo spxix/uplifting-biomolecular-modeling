@@ -598,7 +598,6 @@ class GraphedDenoiseLoop:
                                        step_scale_eta, scond["input_feature_dict"], scond["s_inputs"], scond["s_trunk"], scond["z_trunk"],
                                        scond["pair_z"], scond["p_lm"], scond["c_l"], attn_chunk_size, inplace_safe, enable_efficient_fusion)
         s = torch.cuda.Stream()
-        s.wait_stream(torch.cuda.current_stream())
         audit = None
         ent = {"key": key, "st": st, "cond": scond, "gamma": gamma_on, "body": body}
         if self.biascache is not None:
@@ -607,6 +606,8 @@ class GraphedDenoiseLoop:
         # runs in WARN mode here (a first call may legitimately sync for lazy inits: Triton compile, cuDNN plan cache).
         x0_keep = x0.clone()
         audit = {}
+        # Include the input clone and hoist bindings in the side-stream dependency.
+        s.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(s), _autocast_nocache():
             for pas in range(1 if self.prep.warmup1 else 2):     # lever sampler_prep[warmup1]
                 st["x_l"].copy_(x0_keep)
