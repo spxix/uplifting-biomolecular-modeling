@@ -990,6 +990,20 @@ def _pad8_marker(*a, **k):                      # registered in _BLK_ATT['fn'] u
     raise RuntimeError("pad8 marker called")
 _pad8_marker._fpf_pad8_marker = True
 
+def release_padded_bufs(keep_P=None) -> int:
+    """Drop the shared padded sets whose P differs from ``keep_P`` (None: every P) and return their bytes. A set used inside a CUDA-graph capture
+    is pinned (``graph``) and stays: the captured graph replays its addresses, and freeing them while that graph lives corrupts later replays
+    (stackgraph HAZARD #43 class). Every other set is rebuilt zero-filled on its next use, so release is exact. Without it the dict kept one set per
+    distinct P for the life of the process (2080*P^2 bytes each at H=8, D=32: 13.6 GiB at P=2560), and a long-lived worker that saw a few unaligned
+    sizes held the device's memory across items until every later trunk ran out of memory."""
+    n = 0
+    for key in [k for k, b in _PAD_BUFS.items() if k[0] != keep_P and not b.get("graph")]:
+        n += _PAD_BUFS.pop(key)["bytes"]
+    if n:
+        _STATS["blk_att_padded_releases"] = _STATS.get("blk_att_padded_releases", 0) + 1
+        _STATS["blk_att_padded_released_bytes"] = _STATS.get("blk_att_padded_released_bytes", 0) + n
+    return n
+
 def _padded_bufs(module, N: int, H: int, D: int, HD: int, dev, fill):
     P = ((N + _BLK_PADDED - 1) // _BLK_PADDED) * _BLK_PADDED
     key = (P, int(H), int(D), int(HD), str(dev))                       # shared across modules
@@ -998,6 +1012,7 @@ def _padded_bufs(module, N: int, H: int, D: int, HD: int, dev, fill):
     if b is None or b["N"] != N or b["fill"] != fill or _capturing:  # while capturing ALWAYS re-zero + re-fill inside the captured region (replay-correct for any interleaving of N within a P class)
         if b is None:
             if _capturing: _STATS["blk_att_padded_alloc_during_capture"] = _STATS.get("blk_att_padded_alloc_during_capture", 0) + 1   # allocation inside capture comes from the graph pool (stackgraph check2 guards correctness)
+            else: release_padded_bufs(keep_P=P)          # one P is live per item (every module at that N shares its sets): the other P classes leave before this allocation
             b = {"q": torch.zeros((P, H, P, D), dtype=torch.bfloat16, device=dev), "k": torch.zeros((P, H, P, D), dtype=torch.bfloat16, device=dev),
                  "v": torch.zeros((P, H, P, D), dtype=torch.bfloat16, device=dev), "bias": torch.zeros((1, H, P, P), dtype=torch.float32, device=dev),
                  "g": torch.zeros((P, P, HD), dtype=torch.bfloat16, device=dev), "P": P, "N": None, "fill": None}
@@ -1005,9 +1020,10 @@ def _padded_bufs(module, N: int, H: int, D: int, HD: int, dev, fill):
             _STATS["blk_att_padded_bufs"] = _STATS.get("blk_att_padded_bufs", 0) + 1
             _STATS["blk_att_padded_buf_bytes"] = _STATS.get("blk_att_padded_buf_bytes", 0) + b["bytes"]
             nP = len({k[0] for k in _PAD_BUFS} | {P})
-            assert _STATS["blk_att_padded_bufs"] <= nP * 2, f"padded buffer sets {_STATS['blk_att_padded_bufs']} exceed 2 x distinct P ({nP})"   # invariant: <= 1 set per distinct (P, dims); x2 slack only for a second (H,D) cell
+            assert len(_PAD_BUFS) + 1 <= nP * 2, f"live padded buffer sets {len(_PAD_BUFS) + 1} exceed 2 x distinct P ({nP})"   # invariant: <= 1 live set per distinct (P, dims); x2 slack only for a second (H,D) cell
             if _STATS["blk_att_padded_bufs"] <= 3 or os.environ.get("FPF_VERBOSE"):
-                print(f"[FPF] padded buffers: new shared set P={P} (H={H},D={D}) {b['bytes']/2**20:.0f} MiB; sets={_STATS['blk_att_padded_bufs']} total={_STATS['blk_att_padded_buf_bytes']/2**30:.2f} GiB", flush=True)
+                print(f"[FPF] padded buffers: new shared set P={P} (H={H},D={D}) {b['bytes']/2**20:.0f} MiB; sets={_STATS['blk_att_padded_bufs']} live={len(_PAD_BUFS) + 1} "
+                      f"live_total={(sum(x['bytes'] for x in _PAD_BUFS.values()) + b['bytes'])/2**30:.2f} GiB", flush=True)
         else:                                        # stale valid data of the previous N now sits in pad rows/cols -> re-zero everything (pads must be zero AND NaN-free)
             for t in (b["q"], b["k"], b["v"], b["g"]): t.zero_()
             b["bias"].zero_()
@@ -1017,6 +1033,7 @@ def _padded_bufs(module, N: int, H: int, D: int, HD: int, dev, fill):
         b["bias"]._fpf_padfilled = True; b["bias"]._fpf_zeroed = True
         for t in (b["q"], b["k"], b["v"]): t._fpf_zeroed = True
         b["N"] = N; b["fill"] = fill
+        if _capturing: b["graph"] = True             # a captured graph now holds these addresses: release_padded_bufs never frees this set
         _PAD_BUFS[key] = b
     return b
 def _triatt_block_pro_epi(module, z, ending, epi_block_kernel, prologue, get_cache, chunk_size=None):

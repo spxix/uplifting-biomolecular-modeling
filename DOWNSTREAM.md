@@ -36,3 +36,15 @@ binding hoist buffers. Waiting before the clone did not order its producer with
 the side-stream copy, allowing the first sample of a new shape to read stale
 data under GPU contention. This change adds the missing stream dependency; it
 does not change the sampler math or consume random numbers.
+
+## Padded tri-attention buffer release
+
+The PAD8 trunk path shared one padded q/k/v/bias/g set per padded token count
+and never released it. A long-lived service process kept one set for every
+distinct unaligned size it served (about 2080 x P^2 bytes; 13.6 GiB at 2560
+tokens), so device memory grew across items until every later trunk ran out of
+memory. Allocating a new P class now drops the other classes, and
+`pred_release` drops the previous item's sets before the next predict, also
+after an item that raised. A set used inside a CUDA-graph capture is pinned
+and never released, because the captured graph replays its addresses. Released
+sets are rebuilt zero-filled on their next use, so outputs are unchanged.
