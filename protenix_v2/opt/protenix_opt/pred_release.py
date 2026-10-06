@@ -12,7 +12,9 @@ at the entry of a call, the dict the PREVIOUS call returned (already dumped — 
 a caller still holding the dict sees its device tensors replaced by None) has every CUDA tensor dropped and the allocator cache returned; then the
 stock predict runs. Outputs are untouched (written before the release): EXACT, bitwise by construction. phase_timing wraps predict later (cli.py), outermost: the release is inside total_s, outside fwd_s.
 Lines: the applied marker `PRED_RELEASE:armed|patched` (stack.MARKERS) and, per released item,
-`[protenix-opt] PRED-RELEASE item=<previous item> released_gib=<x> allocated_gib=<after>`.
+`[protenix-opt] PRED-RELEASE item=<previous item> released_gib=<x> padded_gib=<y> allocated_gib=<after>`.
+The previous item's shared padded tri-attention sets (`ptx_trunk2_levers.release_padded_bufs`) leave at the same point, also after an
+item that raised; sets a CUDA graph captured stay.
 The TP line (--n_gpu P) runs one item per launch through its own entry: nothing to release there (the wrapper is inert, count 0).
 Switch: PTX_PRED_RELEASE=1 (modes.PACKAGE_POST for exact and fast; big inherits its base's) — MODEL_OPT_LEVERS_OFF=pred_release removes it.
 """
@@ -52,6 +54,14 @@ def _purge(obj, depth: int = 0) -> int:
     return n
 
 
+def _release_padded() -> int:
+    """The trunk levers' shared padded tri-attention sets (``ptx_trunk2_levers.release_padded_bufs``) of the previous item: rebuilt zero-filled on
+    the next padded call, so the next item starts from the memory a fresh process would have. Graph-pinned sets stay. 0 when the levers are not loaded."""
+    import sys
+    release = getattr(sys.modules.get("ptx_trunk2_levers"), "release_padded_bufs", None)
+    return int(release()) if release is not None else 0
+
+
 def _item_name(data) -> str:
     try:
         return str(data.get("sample_name", "?")) if isinstance(data, dict) else "?"
@@ -67,14 +77,18 @@ def make_wrapper(orig):
         import torch
         last, name = _STATE["last"], _STATE["last_name"]
         _STATE["last"] = None
-        if last is not None:
+        had_last, nbytes = last is not None, 0
+        if had_last:
             nbytes = _purge(last)
-            del last
+        del last
+        padded = _release_padded()                   # also after an item that raised (no `last`): its padded sets must not ride into this one
+        if had_last or padded:
             alloc = 0.0
             if torch.cuda.is_available():
                 torch.cuda.empty_cache(); alloc = torch.cuda.memory_allocated() / 2**30
-            _STATE["released"].append((name, nbytes))
-            print(f"[protenix-opt] PRED-RELEASE item={name} released_gib={nbytes / 2**30:.2f} allocated_gib={alloc:.2f}", flush=True)
+            _STATE["released"].append((name, nbytes + padded))
+            print(f"[protenix-opt] PRED-RELEASE item={name} released_gib={nbytes / 2**30:.2f} padded_gib={padded / 2**30:.2f} "
+                  f"allocated_gib={alloc:.2f}", flush=True)
         out = orig(self, data, *a, **k)
         _STATE["last"] = out; _STATE["last_name"] = _item_name(data)
         return out
