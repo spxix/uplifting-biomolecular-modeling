@@ -453,11 +453,13 @@ def install(model=None) -> str:
                 _copy_in(e, s0, z0, m0)
                 captured = False
                 _clear_global_ptr_caches()          # every data_ptr-keyed cached tensor the graph reads must be PRODUCED inside the graph (see _GLOBAL_PTR_CACHES)
+                torch.cuda.synchronize(); torch._C._cuda_clearCublasWorkspaces()   # cuBLAS workspace allocated inside this graph's pool (see infopt_graphs.core.clear_cublas_workspaces)
                 try:
                     with _capture_ctx(), torch.cuda.graph(g, pool=pool, capture_error_mode="thread_local"):   # autocast cache DISABLED: weight casts recorded in the graph (read persistent fp32 params)
                         e.s_out, e.z_out = _orig(self, e.s_in, e.z_in, **kw_st)
                     captured = True
                     _clear_global_ptr_caches()      # eager code never holds graph-private-pool tensors through these caches
+                    torch.cuda.synchronize(); torch._C._cuda_clearCublasWorkspaces()   # never leave a graph-pool workspace in torch's cache
                 finally:
                     if not captured:                                 # capture died inside the region: restore allocator + RNG state BEFORE anything else runs
                         ST["unpoison"] = _unpoison(dev_idx, pool, g, "capture failed")
