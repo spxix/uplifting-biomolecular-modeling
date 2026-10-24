@@ -41,7 +41,9 @@ This mode binds FlashPairformer kernels via the shared core (opt_core).
 - CUDA graphs: the 48-block stack for inputs up to 448 tokens (`stackgraph`, replay checked once against the eager call per signature) and
   the diffusion sampler's denoiser step with the step-invariant tensors hoisted (`sampler_graph`, `sampler_prep`, `sampler_reach`,
   `sampler_graph_cache_policy`; up to 1536 tokens on a device with at least 64 GiB, 995 below); `sampler_admit` decides per item from the
-  projected sampler peak whether the graphed or the eager sampler runs and names the route. exact.
+  projected sampler peak whether the graphed or the eager sampler runs and names the route. Every capture starts and ends with torch's
+  cached cuBLAS workspaces cleared, so each graph's workspace lives in its own pool and dropping one graph never frees memory another
+  graph replays (torch frees the workspaces of the dropped graph's capture stream, which graphs can share). exact.
 - Sampler elementwise chains (AdaLN tail, output gate, gated residual, SwiGLU) as one fused Triton kernel each (`sampler_fuse`). exact.
 - Runtime policy, no numeric effect: prebuilt stream-correct build of stock's fast-LayerNorm extension for the installed torch
   (`fastln_prebuilt`; source-built by name when none matches), stock fast LayerNorm selected (`layernorm_fast`), memory policy for large

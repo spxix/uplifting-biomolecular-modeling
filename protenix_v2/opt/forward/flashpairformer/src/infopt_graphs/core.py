@@ -180,6 +180,19 @@ def _recover_generator_after_failed_capture():
         return False
 
 
+def clear_cublas_workspaces():
+    """Drop torch's cached per-(cuBLAS handle, stream) workspaces (what torch._inductor.cudagraph_trees does around every capture).
+    torch 2.13 CUDAGraph::~CUDAGraph() -> reset() frees the cached workspace of every handle on the destroyed graph's capture
+    stream, even when another LIVE graph baked that workspace pointer, and torch.cuda.Stream() is a 32-stream round-robin pool
+    (every 32nd call returns torch.cuda.graph's default capture stream).  A graph that captured an eager-allocated workspace
+    therefore replays into freed memory once any graph on the same stream is dropped and empty_cache unmaps the segment
+    ('unspecified launch failure' / 'illegal memory access'; the hazard #43/#44 class).  Clearing before capture_begin makes the
+    capture allocate its workspace inside its own private pool; clearing after capture_end removes the graph-pool workspace
+    from the cache so eager code and later captures never reuse it."""
+    torch.cuda.synchronize()
+    torch._C._cuda_clearCublasWorkspaces()
+
+
 @contextlib.contextmanager
 def capture_context(graph: torch.cuda.CUDAGraph, pool=None, stream: Optional[torch.cuda.Stream] = None, gc_collect: Optional[bool] = None):
     """Like torch.cuda.graph(g, pool, stream) but WITHOUT the gc.collect() + torch.cuda.empty_cache() that torch.cuda.graph
@@ -195,7 +208,7 @@ def capture_context(graph: torch.cuda.CUDAGraph, pool=None, stream: Optional[tor
     s = stream or torch.cuda.Stream()
     s.wait_stream(torch.cuda.current_stream())
     with torch.cuda.stream(s):
-        torch.cuda.synchronize()
+        clear_cublas_workspaces()
         try:
             if pool is None:
                 graph.capture_begin()
@@ -215,6 +228,7 @@ def capture_context(graph: torch.cuda.CUDAGraph, pool=None, stream: Optional[tor
                 _recover_generator_after_failed_capture()
                 if ok:
                     raise
+            clear_cublas_workspaces()
     torch.cuda.current_stream().wait_stream(s)
 
 
