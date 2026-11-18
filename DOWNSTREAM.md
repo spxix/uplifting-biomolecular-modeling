@@ -18,6 +18,18 @@ This is a hardware compatibility adapter, not a new optimization profile.
 Model/service activation remains the consumer's responsibility. InsFold model
 extensions and checkpoint-specific policies do not belong in this adapter.
 
+## Tri-attention epilogue backend
+
+The same adapter reads `V2_EPILOGUE_BACKEND` (`kernel` by default, or `cublas`)
+when `fpf_glue_v2.kernels` is imported; `install()` also adds the import hook
+when only this variable is set. `cublas` runs the epilogue statement of
+`epilogue_v3` (sigmoid gate and o·g rounded to bf16, the output projection on
+cuBLAS with fp32 accumulation, the residual add in bf16) as PyTorch ops for
+single-item bf16 calls; other calls keep the Triton kernel. Its outputs equal
+the kernel's on PPU-ZW810E and H20 at 1024 and 1536 tokens, both nodes. It is
+the faster statement on the PPU and the slower one on H20, so the consumer
+selects it per device.
+
 ## Protenix upstream 4c355be
 
 The host-indexed confidence summary also calls upstream's
