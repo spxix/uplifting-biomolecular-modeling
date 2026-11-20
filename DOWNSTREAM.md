@@ -69,3 +69,14 @@ of its own (for cards the kit ships no table for) keeps them in every kit mode;
 the activation report notes the caller's directory. The stock route
 (`pred --mode off`) keeps such a directory as well, and still refuses the
 kit's `cueq_cache/`. Tables are a pure lookup of tile shapes per GEMM key.
+
+## Eager DiT hoist
+
+`protenix_opt.eager_hoist.install(model)` puts `dit_hoist` on the stock
+(graph-free) sampler for a consumer that keeps the sampler CUDA graph off.
+It is an explicit call after the mode's activation and the model's
+construction. Each sampler call goes through `fpf_clisampler.policy.admit`
+with the mode's `PTX_SAMPLER_ADMIT` word and runs either the hoist or the
+stock sampler; the hoist's buffers are released when the sampler returns,
+and `EagerHoist.release()` releases them again on demand. The hoisted tensors
+are the ones the stock ops compute, so outputs are unchanged.
