@@ -57,7 +57,8 @@ config derives the key only after this step.
 `--mode off` executes `protenix pred <your arguments>` in a subprocess whose environment has every name under `stock/PINS.json`
 `must_be_absent_prefixes` removed (`PTX_*`, `FPF_*`, `INFOPT_*`, `PF_*`, `PROTENIX_OPT*`, `CUEQ_TRITON_CACHE_DIR`) and every `PYTHONPATH`
 entry inside a kit directory removed; before `protenix` is imported the process proves it (no such name, no kit directory on `sys.path`,
-no kit module loaded) and exits 3 otherwise. The deployment variables (`MODEL_OPT*`, the cache directories) stay in place; the stock
+no kit module loaded) and exits 3 otherwise. A `CUEQ_TRITON_CACHE_DIR` the caller set to a directory outside the kit (cuEquivariance tile
+tables of its own, a pure lookup) stays in the stock process; the kit's `cueq_cache/` there is still refused. The deployment variables (`MODEL_OPT*`, the cache directories) stay in place; the stock
 process reads `PROTENIX_ROOT_DIR`, `LAYERNORM_TYPE`, `TORCH_EXTENSIONS_DIR`, `TRITON_CACHE_DIR` as upstream does. `--det 1` is the one named
 exception: the stock process then carries `CUBLAS_WORKSPACE_CONFIG=:4096:8` and `PTX_DET=1`, keeps one kit entry on `PYTHONPATH`
 (`opt/forward/flashpairformer/src`, whose `sitecustomize.py` calls `torch.use_deterministic_algorithms(True, warn_only=True)` under

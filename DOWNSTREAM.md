@@ -18,6 +18,18 @@ This is a hardware compatibility adapter, not a new optimization profile.
 Model/service activation remains the consumer's responsibility. InsFold model
 extensions and checkpoint-specific policies do not belong in this adapter.
 
+## Tri-attention epilogue backend
+
+The same adapter reads `V2_EPILOGUE_BACKEND` (`kernel` by default, or `cublas`)
+when `fpf_glue_v2.kernels` is imported; `install()` also adds the import hook
+when only this variable is set. `cublas` runs the epilogue statement of
+`epilogue_v3` (sigmoid gate and o·g rounded to bf16, the output projection on
+cuBLAS with fp32 accumulation, the residual add in bf16) as PyTorch ops for
+single-item bf16 calls; other calls keep the Triton kernel. Its outputs equal
+the kernel's on PPU-ZW810E and H20 at 1024 and 1536 tokens, both nodes. It is
+the faster statement on the PPU and the slower one on H20, so the consumer
+selects it per device.
+
 ## Protenix upstream 4c355be
 
 The host-indexed confidence summary also calls upstream's
@@ -48,3 +60,30 @@ memory. Allocating a new P class now drops the other classes, and
 after an item that raised. A set used inside a CUDA-graph capture is pinned
 and never released, because the captured graph replays its addresses. Released
 sets are rebuilt zero-filled on their next use, so outputs are unchanged.
+
+## Caller-owned cuEquivariance tile tables
+
+`env.sh` sets `CUEQ_TRITON_CACHE_DIR` to the kit's `cueq_cache/` only when the
+caller has not set it, so a consumer that points cuEquivariance at tile tables
+of its own (for cards the kit ships no table for) keeps them in every kit mode;
+the activation report notes the caller's directory. The stock route
+(`pred --mode off`) keeps such a directory as well, and still refuses the
+kit's `cueq_cache/`. Tables are a pure lookup of tile shapes per GEMM key.
+
+## Eager DiT hoist
+
+`protenix_opt.eager_hoist.install(model)` puts `dit_hoist` on the stock
+(graph-free) sampler for a consumer that keeps the sampler CUDA graph off.
+It is an explicit call after the mode's activation and the model's
+construction. Each sampler call goes through `fpf_clisampler.policy.admit`
+with the mode's `PTX_SAMPLER_ADMIT` word and runs either the hoist or the
+stock sampler; the hoist's buffers are released when the sampler returns,
+and `EagerHoist.release()` releases them again on demand. The hoisted tensors
+are the ones the stock ops compute, so outputs are unchanged.
+
+## F1 prologue cells by device
+
+`MKPF_CELLS.json` resolves `by_device_triton` (`<device name>|<triton M.m>`)
+before the capability keys. `PPU-ZW810E|3.5` (Alibaba PPU, which torch
+reports as cc 8.0) selects `ppu_t35`, measured on that card; its outputs equal
+the `sm80_t37` cell's. Other cards resolve as before.

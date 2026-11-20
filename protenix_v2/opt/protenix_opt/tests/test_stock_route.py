@@ -15,8 +15,9 @@ from protenix_opt import _autoload, cli, modes, stack, stock_pred
 from protenix_opt.tests import _stock_stub
 from protenix_opt.tests.conftest import needs_durable_install
 
+KIT_CUEQ = os.path.join(stack.kit_home(), "levers_addon", "PTXV2_LEVERS_ADDON_v1", "cueq_cache")   # the directory env.sh L7 exports
 POLLUTION = {"PTX_BLK": "2", "PTX_T1_TRANS": "fused", "FPF_OPS": "trimul_out=fpf_smalln:trimul_c256", "INFOPT_GRAPHS_GC": "0", "PF_TRIATTN": "1",
-             "PROTENIX_OPT": "exact", "PROTENIX_OPT_FORCE": "1", "CUEQ_TRITON_CACHE_DIR": "/nonexistent/cueq"}
+             "PROTENIX_OPT": "exact", "PROTENIX_OPT_FORCE": "1", "CUEQ_TRITON_CACHE_DIR": KIT_CUEQ}
 
 
 @pytest.fixture
@@ -252,3 +253,40 @@ def test_stock_env_names_and_strip():
     popped = cli.strip_stock_env(environ, keep=("PROTENIX_OPT",))
     assert popped == sorted(set(POLLUTION) - {"PROTENIX_OPT"}) and set(environ) == {"PATH", "PROTENIX_ROOT_DIR", "PROTENIX_OPT"}
 
+
+
+def test_caller_cueq_cache_is_the_callers_directory_only(tmp_path):
+    assert stack.caller_cueq_cache({}) is None and stack.caller_cueq_cache({"CUEQ_TRITON_CACHE_DIR": " "}) is None
+    assert stack.caller_cueq_cache({"CUEQ_TRITON_CACHE_DIR": KIT_CUEQ}) is None
+    assert stack.caller_cueq_cache({"CUEQ_TRITON_CACHE_DIR": str(tmp_path)}) == str(tmp_path)
+
+
+def test_stock_command_keeps_a_callers_cueq_directory(tmp_path):
+    """A caller's cuEquivariance tile directory outside the kit reaches the stock child and leaves the child's must-be-absent list;
+    the kit's own cueq_cache/ is stripped like the other kit names."""
+    environ = dict(POLLUTION, PATH="/usr/bin", CUEQ_TRITON_CACHE_DIR=str(tmp_path))
+    cmd, env, stripped = cli.stock_command(["--input", "x"], str(tmp_path / "proof.json"), environ=environ)
+    assert env["CUEQ_TRITON_CACHE_DIR"] == str(tmp_path) and "CUEQ_TRITON_CACHE_DIR" not in stripped["env"]
+    assert stripped["env"] == sorted(set(POLLUTION) - {"CUEQ_TRITON_CACHE_DIR"})
+    absent = cmd[cmd.index("--env-absent") + 1].split(",")
+    assert "CUEQ_TRITON_CACHE_DIR" not in absent and set(absent) == set(stack.DEFAULT_STOCK_ENV_ABSENT) - {"CUEQ_TRITON_CACHE_DIR"}
+    _, env2, stripped2 = cli.stock_command([], "p.json", environ=dict(environ, CUEQ_TRITON_CACHE_DIR=KIT_CUEQ))
+    assert "CUEQ_TRITON_CACHE_DIR" not in env2 and "CUEQ_TRITON_CACHE_DIR" in stripped2["env"]
+
+
+def test_env_proof_refuses_the_kit_cueq_directory_even_when_not_listed(tmp_path):
+    absent = [p for p in stack.DEFAULT_STOCK_ENV_ABSENT if p != "CUEQ_TRITON_CACHE_DIR"]
+    kit = stack.kit_class_dirs()
+    own = stock_pred.env_proof(absent, kit, environ={"CUEQ_TRITON_CACHE_DIR": str(tmp_path)}, modules={"os": os}, path=[], meta_path=[])
+    assert own["ok"] is True and own["forbidden_present"] == []
+    theirs = stock_pred.env_proof(absent, kit, environ={"CUEQ_TRITON_CACHE_DIR": KIT_CUEQ}, modules={"os": os}, path=[], meta_path=[])
+    assert theirs["ok"] is False and theirs["forbidden_present"] == ["CUEQ_TRITON_CACHE_DIR"]
+
+
+@pytest.mark.skipif(not os.path.isfile(os.path.join(stack.kit_home(), "env.sh")), reason="kit env.sh not in the tree")
+def test_env_sh_keeps_a_callers_cueq_directory(tmp_path):
+    base = {k: v for k, v in os.environ.items() if not k.startswith(stack.DEFAULT_STOCK_ENV_ABSENT)}
+    before, after, _ = modes.source_env_sh(stack.kit_home(), "E", base)
+    assert after["CUEQ_TRITON_CACHE_DIR"] == KIT_CUEQ
+    before, after, _ = modes.source_env_sh(stack.kit_home(), "E", dict(base, CUEQ_TRITON_CACHE_DIR=str(tmp_path)))
+    assert after["CUEQ_TRITON_CACHE_DIR"] == before["CUEQ_TRITON_CACHE_DIR"] == str(tmp_path)
