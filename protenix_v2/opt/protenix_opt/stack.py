@@ -108,6 +108,26 @@ def stock_env_absent(p: Optional[dict] = None) -> Tuple[str, ...]:
     return tuple(spec)
 
 
+CUEQ_CACHE_ENV = "CUEQ_TRITON_CACHE_DIR"                                 # cuequivariance_ops' tile-table directory: env.sh L7 points it at the kit's cueq_cache/ unless a caller set it
+
+
+def caller_cueq_cache(environ=None) -> Optional[str]:
+    """The cuEquivariance tile-table directory a caller set (``$CUEQ_TRITON_CACHE_DIR`` outside every kit directory), or None (unset, or
+    the kit's own ``cueq_cache/`` from an earlier env.sh). Kit modes keep it (env.sh L7 fills the variable only when unset), and the stock
+    route passes it to its subprocess: the table is the caller's cuEquivariance configuration (a pure lookup of tile shapes), never the
+    kit's. A value inside a kit directory is the kit's table, which a stock process must not read: it is stripped like the rest."""
+    environ = os.environ if environ is None else environ
+    d = (environ.get(CUEQ_CACHE_ENV) or "").strip()
+    if not d:
+        return None
+    p = os.path.realpath(d)
+    for k in kit_class_dirs():
+        r = os.path.realpath(k)
+        if p == r or p.startswith(r + os.sep):
+            return None
+    return d
+
+
 def kit_class_dirs() -> List[str]:
     """The kit directories of the tree (``opt/forward``): a sys.path or PYTHONPATH entry inside one of them puts kit code on the path."""
     return [os.path.join(opt_home(), d) for d in KIT_CLASS_DIRNAMES]
@@ -1135,6 +1155,8 @@ def _activate_body(mode: str, strict: bool, trigger: Optional[str], det: Optiona
     entries = kit_sys_path(res.pythonpath, fpf_home, mode=mode)
     if os.environ.get("CUEQ_TRITON_TUNING"):
         notes.append("CUEQ_TRITON_TUNING is set: the L1 tuned-tile cache must run as a pure lookup; unset it")
+    if caller_cueq_cache(os.environ):                                  # env.sh L7 kept it: cuequivariance reads the caller's tables, not the kit's cueq_cache/
+        notes.append(f"{CUEQ_CACHE_ENV}={os.environ[CUEQ_CACHE_ENV]} was set by the caller: cuequivariance reads its tile tables there, not the kit's cueq_cache/")
     _install_sys_path(entries)
     kern = _route_kernels(fpf_home)                                    # before the first import of a routed kernel (the levers import it while they apply)
     base["kernels"] = kern

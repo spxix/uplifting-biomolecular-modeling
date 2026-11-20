@@ -60,3 +60,12 @@ memory. Allocating a new P class now drops the other classes, and
 after an item that raised. A set used inside a CUDA-graph capture is pinned
 and never released, because the captured graph replays its addresses. Released
 sets are rebuilt zero-filled on their next use, so outputs are unchanged.
+
+## Caller-owned cuEquivariance tile tables
+
+`env.sh` sets `CUEQ_TRITON_CACHE_DIR` to the kit's `cueq_cache/` only when the
+caller has not set it, so a consumer that points cuEquivariance at tile tables
+of its own (for cards the kit ships no table for) keeps them in every kit mode;
+the activation report notes the caller's directory. The stock route
+(`pred --mode off`) keeps such a directory as well, and still refuses the
+kit's `cueq_cache/`. Tables are a pure lookup of tile shapes per GEMM key.

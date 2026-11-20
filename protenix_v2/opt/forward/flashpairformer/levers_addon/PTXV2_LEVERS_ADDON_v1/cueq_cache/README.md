@@ -1,6 +1,7 @@
 # cueq_cache/ — the kit's cuEquivariance TriMul autotune cache (lever `cueq_tuned_tiles`)
 
-`env.sh` points `CUEQ_TRITON_CACHE_DIR` at this directory in every kit mode. cuEquivariance's Triton triangle-multiplication kernel
+`env.sh` points `CUEQ_TRITON_CACHE_DIR` at this directory in every kit mode, unless the caller set it (a caller's directory is kept, and
+the tables there replace these). cuEquivariance's Triton triangle-multiplication kernel
 (`fused_sigmoid_gated_dual_gemm`, cuequivariance_ops 0.11) reads its tile table for the running card from
 `fused_sigmoid_gated_dual_gemm_forward_kernel_wrapper.<cc>.json` here, `<cc>` being the card's compute capability (a cc 10.3 card reads the
 10.0 file); only when no such file exists does it open the table packaged inside its own wheel — a file here replaces the packaged table for
