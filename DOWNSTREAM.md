@@ -80,3 +80,10 @@ with the mode's `PTX_SAMPLER_ADMIT` word and runs either the hoist or the
 stock sampler; the hoist's buffers are released when the sampler returns,
 and `EagerHoist.release()` releases them again on demand. The hoisted tensors
 are the ones the stock ops compute, so outputs are unchanged.
+
+## F1 prologue cells by device
+
+`MKPF_CELLS.json` resolves `by_device_triton` (`<device name>|<triton M.m>`)
+before the capability keys. `PPU-ZW810E|3.5` (Alibaba PPU, which torch
+reports as cc 8.0) selects `ppu_t35`, measured on that card; its outputs equal
+the `sm80_t37` cell's. Other cards resolve as before.

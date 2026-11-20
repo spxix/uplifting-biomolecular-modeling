@@ -42,11 +42,12 @@ MEASURED_OFF_CC = {"10.3": "B300: the certified compositions run without MK-PF (
                    "8.0": "A100: the certified compositions run without MK-PF (no cell measured on cc 8.0)"}    # capabilities the measured compositions run with these levers OFF, by name
 
 
-def resolve_cells(device=None, *, cc=None, triton=None):
-    """-> the cells entry for this (cc, triton), or {} with ``_STATE['why']`` naming the case.  Resolution: the exact ``<cc>|<triton M.m>`` entry; else the capability's
+def resolve_cells(device=None, *, cc=None, triton=None, name=None):
+    """-> the cells entry for this (cc, triton), or {} with ``_STATE['why']`` naming the case.  Resolution: the device's own ``<device name>|<triton M.m>``
+    entry (``by_device_triton``: a card that reports another card's capability, e.g. the Alibaba PPU-ZW810E at cc 8.0); else the exact ``<cc>|<triton M.m>`` entry; else the capability's
     ``by_cc`` entry, applied and NAMED as unverified on this triton (``FPF_MKPF_ALLOW_TRITON=0`` refuses it instead, by name); else none — a capability the measured compositions
     run with these levers off (MEASURED_OFF_CC) or an UNKNOWN capability (these kernels carry per-capability cells only: ``install()`` refuses by name and the composed path runs
-    without them).  ``cc`` / ``triton`` name the environment for a decision off the device."""
+    without them).  ``cc`` / ``triton`` / ``name`` name the environment for a decision off the device (the device name is read only when ``cc`` is not given)."""
     path = os.environ.get("FPF_MKPF_CELLS_JSON") or os.path.join(os.path.dirname(os.path.abspath(__file__)), "MKPF_CELLS.json")
     with open(path) as _fh:
         doc = json.load(_fh)
@@ -54,10 +55,17 @@ def resolve_cells(device=None, *, cc=None, triton=None):
         import torch
         dev = device if device is not None else torch.device("cuda", torch.cuda.current_device())
         cap = torch.cuda.get_device_capability(dev); cc = f"{cap[0]}.{cap[1]}"
+        if name is None:
+            name = torch.cuda.get_device_name(dev)
     tmm = triton if triton is not None else _triton_mm()
     key = f"{cc}|{tmm}"
-    ent = doc.get("by_cc_triton", {}).get(key)
     note = ""
+    dkey = f"{str(name).strip()}|{tmm}" if name else None
+    ent = doc.get("by_device_triton", {}).get(dkey) if dkey else None
+    if ent is not None:
+        cells = doc["entries"][ent]; _STATE["why"] = f"{dkey} -> '{ent}'"; _STATE["cells"] = cells
+        return cells
+    ent = doc.get("by_cc_triton", {}).get(key)
     if ent is None:
         fb = doc.get("by_cc", {}).get(str(cc))
         if fb is not None and os.environ.get("FPF_MKPF_ALLOW_TRITON", "") != "0":
