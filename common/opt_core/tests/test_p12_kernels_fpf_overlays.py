@@ -75,3 +75,13 @@ def test_mkpf_resolution(M, capfd):
     os.environ.pop("FPF_MKPF_ALLOW_TRITON")
     assert M.resolve_cells(cc="10.3", triton="3.7") == {} and M._STATE["why"].startswith("no MKPF cells for cc 10.3 (off: not-measured")
     assert M.resolve_cells(cc="8.6", triton="3.7") == {} and M._STATE["why"].startswith("no MKPF cells for cc 8.6 (unknown capability")
+
+
+def test_mkpf_device_entry_wins_over_its_capability(M, capfd):
+    """A card that reports another card's capability (the PPU at cc 8.0) gets its own entry by device name and triton; other cards of that
+    capability, and the device on another triton, keep the capability's resolution."""
+    cells = M.resolve_cells(cc="8.0", triton="3.5", name="PPU-ZW810E")
+    assert cells["f1"]["cfg"]["num_warps"] == 4 and M._STATE["why"] == "PPU-ZW810E|3.5 -> 'ppu_t35'"
+    assert capfd.readouterr().err == ""
+    assert M.resolve_cells(cc="8.0", triton="3.7", name="NVIDIA A100-SXM4-80GB") is not None and M._STATE["why"] == "8.0|3.7 -> 'sm80_t37'"
+    assert M.resolve_cells(cc="8.0", triton="3.7", name="PPU-ZW810E") and M._STATE["why"] == "8.0|3.7 -> 'sm80_t37'"
