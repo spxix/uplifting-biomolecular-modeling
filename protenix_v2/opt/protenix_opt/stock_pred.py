@@ -3,7 +3,8 @@
 ``pred --mode off`` execs this module (``python -s -m protenix_opt.stock_pred --proof-json <out_dir>/stock_env_proof.json --env-absent
 <prefixes> --kit-dirs <dirs> -- pred <stock arguments>``) with every environment name under stock/PINS.json
 ``stock_environment.must_be_absent_prefixes`` stripped and every PYTHONPATH entry inside a kit directory removed (cli.stock_command).
-Before anything of protenix is imported the process proves what it is (``env_proof``): no forbidden environment name, no kit module
+Before anything of protenix is imported the process proves what it is (``env_proof``): no forbidden environment name (a caller's
+``CUEQ_TRITON_CACHE_DIR`` outside the kit directories is the caller's cuEquivariance configuration and stays; inside them it is refused), no kit module
 loaded (by name or by file), no kit directory on sys.path, the package's autoload finder not armed, the kit's sitecustomize not this
 process's, torch not yet imported; the proof is written as JSON and read into ``opt_manifest.json`` by the ``pred`` process. A process
 that fails its proof exits 3 without running anything. Under ``--det 1`` the caller passes the ONE named exception (``--det-env``,
@@ -55,8 +56,19 @@ def env_proof(env_absent: Iterable[str], kit_dirs: Iterable[str], environ=None, 
     core module beyond the proof machinery. ``ok`` is the conjunction; every list names the violations. With ``det_exception``
     (``{"env": {name: value}, "pythonpath": [dir]}``) the proof allows exactly the carve-out and nothing beyond it: ``deviations`` names
     every difference. ``kit_modules_loaded_after`` (the same scan once the stock call has returned) is added by ``run``."""
-    return _proof.env_proof(env_absent=env_absent, kit_dirs=kit_dirs, module_prefixes=KIT_MODULE_PREFIXES, environ=environ, modules=modules,
-                            path=path, meta_path=meta_path, det_exception=det_exception)
+    env_absent, kit_dirs = list(env_absent), list(kit_dirs)
+    proof = _proof.env_proof(env_absent=env_absent, kit_dirs=kit_dirs, module_prefixes=KIT_MODULE_PREFIXES, environ=environ, modules=modules,
+                             path=path, meta_path=meta_path, det_exception=det_exception)
+    env = os.environ if environ is None else environ
+    d = (env.get(CUEQ_CACHE_ENV) or "").strip()
+    roots = [os.path.realpath(k) for k in kit_dirs if k]
+    if d and CUEQ_CACHE_ENV not in proof["forbidden_present"] and any(
+            os.path.realpath(d) == r or os.path.realpath(d).startswith(r + os.sep) for r in roots):
+        proof["forbidden_present"] = sorted(proof["forbidden_present"] + [CUEQ_CACHE_ENV])   # the caller's exception covers its own directory only,
+        if proof.get("det_exception"):                                                       # never the kit's cueq_cache/
+            proof["det_exception"]["deviations"].append(f"{CUEQ_CACHE_ENV}={d} is inside a kit directory")
+        proof["ok"] = False
+    return proof
 
 
 LEVER_MODULE = "ptx_trunk2_levers"                                      # the kit's lever module: never imported by a stock call, det or not

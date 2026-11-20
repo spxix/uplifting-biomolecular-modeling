@@ -292,12 +292,14 @@ def strip_stock_env(environ, keep: tuple[str, ...] = ()) -> list[str]:
 def stock_command(rest: list[str], proof_path: str, environ: dict | None = None, det_exception: dict | None = None) -> tuple[list[str], dict, dict]:
     """The stock subprocess (``stock_pred.py``) for ``pred --mode off``: its command line and its environment — ``environ`` (the process
     environment by default) without every name under stock/PINS.json's must-be-absent prefixes and without the PYTHONPATH entries inside a
-    kit directory. With ``det_exception`` (det.stock_exception(): the recipe's names and values, its one kit PYTHONPATH entry) the
+    kit directory. A caller's ``CUEQ_TRITON_CACHE_DIR`` outside the kit (stack.caller_cueq_cache) is kept and left off the child's list. With ``det_exception`` (det.stock_exception(): the recipe's names and values, its one kit PYTHONPATH entry) the
     environment carries exactly that on top of the stripped one and the subprocess is told to prove it. Returns ``(command, env, stripped)``
     with ``stripped = {"env": [names removed], "pythonpath": [entries removed]}``."""
     from . import stack
     environ = os.environ if environ is None else environ
     absent = stack.stock_env_absent()
+    if stack.caller_cueq_cache(environ):                                     # a caller's cuEq tile directory (outside the kit) stays; the child's proof still
+        absent = tuple(p for p in absent if p != stack.CUEQ_CACHE_ENV)       # refuses a kit directory there (stock_pred.env_proof)
     kit_dirs = stack.kit_class_dirs()
     env, stripped_names = _proof.strip_env(environ, absent)
     kept, stripped_entries = _proof.strip_pythonpath(environ.get("PYTHONPATH"), kit_dirs)
