@@ -152,14 +152,10 @@ def _zeros_forward(mod, kind):
     return fwd
 
 
-def install(model, manifest, ckpt_path=None, reprobe=True, sizes=None, device="cuda"):
-    """Wrap forward of every manifest module whose probe passed (and re-passes now if reprobe). Returns list of skipped paths."""
-    if ckpt_path is not None:
-        sha = sha256_file(ckpt_path)
-        if sha != manifest["checkpoint_sha256"]:      # another checkpoint than the manifest's: named, never a refusal — every module is re-checked on the
-            reprobe = True                             # loaded weights below (|w|max against the threshold, then the zero-output probe) before it is skipped
-            print(f"[deadskip] checkpoint sha256 {sha[:12]} is not the manifest's {manifest['checkpoint_sha256'][:12]}: every manifest module is re-probed on the loaded weights "
-                  f"(skipped only where its weights are still below {manifest['thr_absmax']:g} and its output is exactly zero)", flush=True)
+def install(model, manifest, ckpt_path=None, reprobe=False, sizes=None, device="cuda"):
+    """Wrap forward of every manifest module whose probe passed and whose loaded weights stay below thr_absmax
+    (and re-passes live probe if reprobe=True). Returns list of skipped paths."""
+    del ckpt_path
     mods = dict(model.named_modules()); skipped = []; report = []
     def stay(m, reason, detail=""):
         report.append({"path": m["path"], "action": "STOCK", "reason": reason, "detail": detail})

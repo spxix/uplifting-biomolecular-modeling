@@ -84,6 +84,8 @@ def test_route_exposes_exactly_one_name(tmp_path):
 
 
 def test_route_check_ok_with_or_without_the_kit_table(tmp_path, monkeypatch):
+    import filecmp
+    monkeypatch.setattr(filecmp, "cmp", lambda *a, **k: pytest.fail("route_check must not compare files byte-by-byte at runtime"))
     kernels.route("fpf_trimul_v4")
     monkeypatch.delenv("FPF_TRIMUL_V4_CELLS", raising=False)
     g = kernels.route_check("fpf_trimul_v4", path=[str(tmp_path)])                          # routed, no kit table exported: the package's own table serves every part
@@ -95,7 +97,7 @@ def test_route_check_ok_with_or_without_the_kit_table(tmp_path, monkeypatch):
     monkeypatch.setenv("FPF_TRIMUL_V4_CELLS", __file__)                                      # any existing file satisfies the gate (the loader parses it)
     g = kernels.route_check("fpf_trimul_v4", path=[str(tmp_path)])
     assert g.ok, g.reason
-    assert g.details["differing"] == [] and g.details["missing"] == [] and g.details["routed"] and g.details["exports"] == []
+    assert g.details["routed"] and g.details["exports"] == []
     assert g.details["resolved"] == kernels.carried_path("fpf_trimul_v4") and not g.details["already_imported"]
     assert g.details["runtime_imports"] == {}                              # fpf_trimul_v4 imports no other carried kernel at run time
     assert "fpf_trimul_v4" not in sys.modules and "fpf_trimul" not in sys.modules, "route_check imported a kernel"
@@ -141,8 +143,8 @@ def test_a_kept_copy_is_never_shadowed(tmp_path, monkeypatch):
     assert g.ok and g.details["runtime_imports"]["fpf_transition"] == str(kit / "fpf_transition")
     import fpf_transition                                                                   # a real import of the kit's copy (no torch: __init__ is empty)
     assert os.path.dirname(os.path.abspath(fpf_transition.__file__)) == str(kit / "fpf_transition")
-    g = kernels.route_check("fpf_transition")                                               # asking the core about the kit's copy names the difference
-    assert not g.ok and g.details["differing"] == ["transition.py"] and g.details["already_imported"] and not g.details["routed"]
+    g = kernels.route_check("fpf_transition")                                               # asking the core about the kit's copy names the path mismatch
+    assert not g.ok and "not the core copy" in g.reason and g.details["already_imported"] and not g.details["routed"]
 
 
 def test_route_wins_over_a_neighbouring_copy_on_sys_path(tmp_path, monkeypatch):
@@ -159,34 +161,34 @@ def test_route_wins_over_a_neighbouring_copy_on_sys_path(tmp_path, monkeypatch):
 
 def test_route_refuses_a_neighbouring_version_by_name(tmp_path, monkeypatch):
     other = tmp_path / "fpf_trimul_v4"
-    shutil.copytree(kernels.carried_path("fpf_trimul_v4"), other, ignore=shutil.ignore_patterns("__pycache__"))
-    with open(other / "trimul.py", "ab") as fh:
-        fh.write(b"\n# one more byte\n")
-    os.remove(other / "kexp.py")
+    other.mkdir()
+    (other / "__init__.py").write_text("")
     monkeypatch.setenv("FPF_TRIMUL_V4_CELLS", __file__)
     g = kernels.route_check("fpf_trimul_v4", path=[str(tmp_path)])                          # not routed: the neighbour resolves
     assert not g.ok and g.details["resolved"] == str(other)
-    assert g.details["differing"] == ["trimul.py"] and g.details["missing"] == ["kexp.py"]
-    assert "differing [trimul.py]" in g.reason and "missing [kexp.py]" in g.reason and kernels.sums("fpf_trimul_v4")["version"] in g.reason
+    assert "not the core copy" in g.reason and kernels.sums("fpf_trimul_v4")["version"] in g.reason
 
 
 def test_route_refuses_a_differing_single_module(tmp_path):
-    (tmp_path / "flash_triattn.py").write_bytes(open(os.path.join(kernels.KERNELS_DIR, "flash_triattn.py"), "rb").read() + b"\n")
+    (tmp_path / "flash_triattn.py").write_text("# neighbour\n")
     g = kernels.route_check("flash_triattn", path=[str(tmp_path)])
-    assert not g.ok and g.details["differing"] == ["flash_triattn.py"]
+    assert not g.ok and "not the core copy" in g.reason
 
 
 def test_already_imported_copy_answers_with_its_own_location(tmp_path, monkeypatch):
-    identical = tmp_path / "fpf_trimul"
-    shutil.copytree(kernels.carried_path("fpf_trimul"), identical, ignore=shutil.ignore_patterns("__pycache__"))
+    other = tmp_path / "fpf_trimul"
+    other.mkdir()
+    (other / "__init__.py").write_text("")
     stub = types.ModuleType("fpf_trimul")
-    stub.__file__ = str(identical / "__init__.py")
+    stub.__file__ = str(other / "__init__.py")
     monkeypatch.setitem(sys.modules, "fpf_trimul", stub)
     g = kernels.route_check("fpf_trimul")
-    assert g.ok and g.details["already_imported"] and g.details["resolved"] == str(identical)
-    (identical / "kernels.py").write_bytes(b"# not the carried bytes\n")
-    g = kernels.route_check("fpf_trimul")
-    assert not g.ok and g.details["differing"] == ["kernels.py"]
+    assert not g.ok and g.details["already_imported"] and g.details["resolved"] == str(other)
+    core_stub = types.ModuleType("fpf_trimul")
+    core_stub.__file__ = os.path.join(kernels.carried_path("fpf_trimul"), "__init__.py")
+    monkeypatch.setitem(sys.modules, "fpf_trimul", core_stub)
+    g2 = kernels.route_check("fpf_trimul")
+    assert g2.ok and g2.details["already_imported"] and g2.details["resolved"] == kernels.carried_path("fpf_trimul")
 
 
 def test_exports_contract():

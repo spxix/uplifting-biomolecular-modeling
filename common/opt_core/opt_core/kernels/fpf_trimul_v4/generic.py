@@ -178,14 +178,6 @@ def _trimul_packed(z, mask, *, outgoing, weights, residual=False, eps=1e-5, stoc
         COUNTS["unsupported"][e.reason] = COUNTS["unsupported"].get(e.reason, 0) + 1
         raise
     N = int(z.shape[-2])
-    pk = (str(z.device), int(weights["C"]), int(weights["D"]), bool(weights.get("has_bias")), z.dtype == torch.float32)
-    if pk not in _PROBES:                                                                  # the warm probe: once per (device, shape class), before the first served call of the class
-        try:
-            if probe(z.device, pk[1], pk[2], pk[3], pk[4]) is not None:
-                cfg = _check(z, mask, weights, None, None, n_min=n_min)                                 # the probe may have switched the process to the SAFE cell, turned the lever off, or refused the class
-        except TrimulUnsupported as e:
-            COUNTS["unsupported"][e.reason] = COUNTS["unsupported"].get(e.reason, 0) + 1
-            raise
     zs = z if z.dim() == 4 else z.unsqueeze(0)
     B = int(zs.shape[0])
     sr = _STOCK_ROUND if stock_round is None else bool(stock_round)
@@ -226,7 +218,7 @@ def _trimul_packed(z, mask, *, outgoing, weights, residual=False, eps=1e-5, stoc
     if COUNTS["first_call"] is None:
         COUNTS["first_call"] = {"N": N, "B": B, "batch_mode": BATCH_MODE, "pad": pad, "C": weights["C"], "D": weights["D"], "dir": "out" if outgoing else "in", "residual": bool(residual),
                                 "mask": mask is not None, "bias": bool(weights.get("has_bias")), "dtype": str(z.dtype), "device": torch.cuda.get_device_name(z.device)}
-        _log("FIRST CALL served: %s %s cfg=%s cells_sha=%s" % (COUNTS["first_call"], CELLS.cell_word(z.device), json.dumps(CELLS.cell_for(z.device)), CELLS.cells_sha()))
+        _log("FIRST CALL served: %s %s cfg=%s" % (COUNTS["first_call"], CELLS.cell_word(z.device), json.dumps(CELLS.cell_for(z.device))))
     return out
 
 

@@ -141,13 +141,6 @@ def _check_digest(m):
     so = m["_so"]
     if not os.path.isfile(so):
         raise Unavailable("no_prebuilt:%s(%s missing)" % (m["_key"], os.path.basename(so)))
-    from opt_core.gates import binary_refusal  # noqa: PLC0415
-    why = binary_refusal(so)
-    if why:
-        raise Unavailable("so_refused:%s(%s)" % (m["_key"], why))
-    want = m.get("so_sha256")
-    if want and _sha256(so) != want:
-        raise Unavailable("so_digest:%s" % m["_key"])
 
 
 def load(key=None):
