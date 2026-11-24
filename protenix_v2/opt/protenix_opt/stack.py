@@ -1036,7 +1036,7 @@ def _dry_run(mode: str, strict: bool, det: Optional[bool] = None) -> dict:
                partial=bool(unavailable), levers_unavailable=unavailable, fallback_reasons={n: why[n] for n in unavailable + skipped},
                row_key=res.row_key, base=res.base, pre_exports=res.pre_exports, env=res.exports, unset=res.unsets,
                extras=res.extras, prebuilt=final.get("INFOPT_FASTLN_PREBUILT"), kernel_key=res.kernel_key, kit_spec=res.kit_spec,
-               notes=base.get("notes", []) + res.notes, sys_path=entries, graphed_py=graphed_py(entries), graphed_py_sha256=graphed_py_sha256(entries),
+               notes=base.get("notes", []) + res.notes, sys_path=entries, graphed_py=graphed_py(entries), graphed_py_sha256=None,
                cells=cells(base["gpu"]["sm"]),
                reason="dry run: resolved and gated, nothing applied", env_final_size=len(final))
     _report.log_activation(rep); rep["logged"] = True
@@ -1165,7 +1165,7 @@ def _activate_body(mode: str, strict: bool, trigger: Optional[str], det: Optiona
                           + "; ".join(f"{n}: {ev}" for n, ev in leaked.items()) + " (the kit's own applied record says the lever engaged)")
     on, fb, skipped, why = _classify(mode, applied, os.environ, notes, row=res.row, row_key=res.row_key, sm=base["gpu"].get("sm"))
     _REPORT = dict(base, active=True, levers_applied=on, levers_fallback=fb, levers_not_in_arm=skipped, fallback_reasons=why,
-                   graphed_py=graphed_py(entries), graphed_py_sha256=graphed_py_sha256(entries),   # the infopt_graphs copy this process imports (env.sh L6 order)
+                   graphed_py=graphed_py(entries), graphed_py_sha256=None,   # the infopt_graphs copy this process imports (env.sh L6 order)
                    partial=bool(fb), levers_unavailable=list(fb),              # what the kit's own applied/refused records left off, relative to the README row
                    row_key=res.row_key, base=res.base, pre_exports=res.pre_exports,
                    applied_markers=applied, env=res.exports, unset=res.unsets, extras=res.extras, prebuilt=os.environ.get("INFOPT_FASTLN_PREBUILT"),

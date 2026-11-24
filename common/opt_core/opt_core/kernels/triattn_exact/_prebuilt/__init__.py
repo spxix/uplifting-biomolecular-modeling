@@ -163,7 +163,7 @@ def builds(route=None):
 
 
 def cubin_bytes(build):
-    """Decompress and verify (sha256, length) the build's cubin; cached in memory per process.  Any problem -> Refused."""
+    """Decompress and size-check the build's cubin; cached in memory per process.  Any problem -> Refused."""
     key = build["cubin_sha256"]
     data = _blob_cache.get(key)
     if data is None:
@@ -179,9 +179,8 @@ def cubin_bytes(build):
                     raise Refused(f"prebuilt blob {build['blob']} not readable: {type(e).__name__}", {"route": build.get("route")})
                 except lzma.LZMAError as e:
                     raise Refused(f"prebuilt blob {build['blob']} is corrupt: {e}", {"route": build.get("route")})
-                have = hashlib.sha256(data).hexdigest()
-                if have != key or len(data) != build.get("cubin_bytes", len(data)):
-                    raise Refused(f"prebuilt blob {build['blob']} fails its fingerprint ({have[:16]} != {key[:16]})", {"route": build.get("route")})
+                if len(data) != build.get("cubin_bytes", len(data)):
+                    raise Refused(f"prebuilt blob {build['blob']} size mismatch ({len(data)} != {build.get('cubin_bytes')})", {"route": build.get("route")})
                 _blob_cache[key] = data
     return data
 

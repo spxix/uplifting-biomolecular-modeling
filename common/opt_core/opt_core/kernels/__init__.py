@@ -58,21 +58,26 @@ def _live_files(name: str, kind: str) -> List[str]:
     return sorted(os.path.basename(p) for p in glob.glob(os.path.join(KERNELS_DIR, name + ".*")))
 
 
-def sums(name: str) -> dict:
-    """The metadata of ``name``: kind, version, license, not_carried, exports, runtime_imports, and ``files`` -- the live file
-    list (relative paths), computed now, not stored."""
+def _meta(name: str) -> dict:
+    """Read only ``META/<name>.json`` without walking the carried files on disk."""
     path = os.path.join(META_DIR, name + ".json")
     if not os.path.isfile(path):
         raise KeyError(f"no carried kernel {name!r} (carried: {', '.join(names())})")
     with open(path, encoding="utf-8") as fh:
-        doc = json.load(fh)
+        return json.load(fh)
+
+
+def sums(name: str) -> dict:
+    """The metadata of ``name``: kind, version, license, not_carried, exports, runtime_imports, and ``files`` -- the live file
+    list (relative paths), computed now, not stored."""
+    doc = _meta(name)
     doc["files"] = _live_files(name, doc["kind"])
     return doc
 
 
 def carried_path(name: str) -> str:
     """The core copy: the package directory or the module file."""
-    return os.path.join(KERNELS_DIR, name if sums(name)["kind"] == "package" else name + ".py")
+    return os.path.join(KERNELS_DIR, name if _meta(name)["kind"] == "package" else name + ".py")
 
 
 def carried_files() -> List[str]:
@@ -189,7 +194,7 @@ def resolve(name: str, path: Optional[List[str]] = None) -> Optional[str]:
 
 def exports(name: str, **values) -> Dict[str, str]:
     """The environment a kit exports BEFORE importing ``name``: each export names its parameter; a required one missing raises by name."""
-    doc = sums(name)
+    doc = _meta(name)
     env = {}
     for var, spec in sorted(doc.get("exports", {}).items()):
         val = values.get(spec["param"])
@@ -205,7 +210,7 @@ def exports_check(name: str, environ: Optional[Mapping[str, str]] = None) -> Lis
     """The required exports of ``name`` held in ``environ``: a list of problems (variable unset; a path export naming a missing file)."""
     environ = os.environ if environ is None else environ
     problems = []
-    for var, spec in sorted(sums(name).get("exports", {}).items()):
+    for var, spec in sorted(_meta(name).get("exports", {}).items()):
         val = environ.get(var)
         if not val:
             if spec.get("required"):
@@ -217,11 +222,11 @@ def exports_check(name: str, environ: Optional[Mapping[str, str]] = None) -> Lis
 
 
 def route_check(name: str, path: Optional[List[str]] = None, environ: Optional[Mapping[str, str]] = None) -> Gate:
-    """Gate: ``import <name>`` resolves to bytes identical to the core's own copy (a live comparison, not a stored digest), and
-    every required export is in the environment and names an existing file. Run it BEFORE the first import of the kernel (the
+    """Gate: ``import <name>`` resolves to the core copy on disk (structural path & entry-point check; no runtime byte-by-byte walk),
+    and every required export is in the environment and names an existing file. Run it BEFORE the first import of the kernel (the
     carried code reads its exports at import). ``details`` carries the resolution of every ``runtime_imports`` name (None = not
     importable: the kernel's own fallback applies) — the kit records it."""
-    doc = sums(name)
+    doc = _meta(name)
     core = carried_path(name)
     where = resolve(name, path)
     details = {"kernel": name, "core_copy": core, "resolved": where, "routed": name in routed(), "already_imported": name in sys.modules,
@@ -229,13 +234,12 @@ def route_check(name: str, path: Optional[List[str]] = None, environ: Optional[M
     gate = f"kernel_route:{name}"
     if where is None:
         return Gate(name=gate, ok=False, details=details, reason=f"{name} not importable: kernels.route({name!r}) routes it to the core copy")
-    root = where if doc["kind"] == "package" else os.path.dirname(where)
-    h = _hold(root, name, doc["kind"])
-    details.update(h)
-    if h["differing"] or h["missing"]:
+    if os.path.realpath(where) != os.path.realpath(core):
         return Gate(name=gate, ok=False, details=details,
-                    reason=(f"{name} resolves to {where}, not the carried bytes ({doc['version']}): differing [{', '.join(h['differing'][:6]) or '-'}] "
-                            f"missing [{', '.join(h['missing'][:6]) or '-'}] — a neighbouring version is never served silently"))
+                    reason=f"{name} resolves to {where}, not the core copy {core} ({doc['version']}) — a neighbouring version is never served silently")
+    entry = os.path.join(where, "__init__.py") if doc["kind"] == "package" else where
+    if not os.path.isfile(entry):
+        return Gate(name=gate, ok=False, details=details, reason=f"{name} entry missing at {entry}")
     problems = exports_check(name, environ)
     details["exports"] = problems
     if problems:

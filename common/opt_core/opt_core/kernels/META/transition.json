@@ -21,7 +21,7 @@
  "served_note": "TRANSITION_CELLS.json transition_cells/v1: measured cells on cc 9.0 and 8.0 (4 stacks; dtype bf16 | fp32; cells pair_c128_n4 pair_c256_n4 pair_c128_n2 pair_c384_n4 single_c384_n4 rows_c64_n4 esmpair_c256_n4; passes fwd | fwdbwd; timing eager | graph; ESM-family rows esm_t15 / esm_t16 forward, esm_kd3 / esm_t16_kd3 / esm_t15_kd3 forward+backward); default rule = a row word serves exactly that row, tier words opt-in; EXACT FLOOR x1.00 (bitwise per cell, else the stock arm by name); compile named capture-unsafe; af3_fused warms before capture Cells reach 2048 tokens on both cards for the AF3-family widths; single_c768_n4 (c 768) is tabled with the statement as its winner by measurement and v1 / pf refuse widths outside 64/128/256/384 by name.",
  "version": "1.25.1",
  "carried_digests": {
-  "flash_sm90a": "tree:178a900bd7ef973b4d6e04322d87a85e20b247cf68578a8cff57f33c0fdc2298",
+  "flash_sm90a": "tree:e6fb28e7b626a3e9a4f5ef3703e26e4e6d21f5948fdc7fca48f3b90f37e84b75",
   "esm/ef2_pair_v2.py": "1d9b9e7c68638a179246ba51dab4876162864a9232f02e452818202e2d2cbd33",
   "esm/ef2_autograd_kernels.py": "93ba83c657c91d81ccbd4efbddebfc20822014cb043e3719dbf53ea60972172f",
   "esm/ef2_t16_transition.py": "7880d3a0f55c7d1d91f06a20fd888404a50db6f0d8e99cae04f69a5e78ec9b62",

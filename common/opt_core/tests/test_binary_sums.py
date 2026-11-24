@@ -1,17 +1,19 @@
-"""Shipped binaries are held to SHA256SUMS before any loader maps them (opt_core.gates.binary_refusal; tools/binary_sums.py).
+"""Offline SHA256SUMS tooling (tools/binary_sums.py) and runtime loader contract (presence + ABI checks, zero runtime SHA256 / GPU probes).
 
-The tree: every compiled binary under opt_core/ (.so, .cubin, .cubin.xz) is a line of the SHA256SUMS in its own directory or in the
-nearest directory above it inside the package, digest equal — so nothing the package ships is refused.  The rule: listed and equal
-passes (listed in gates.BINARIES_HELD); unlisted, altered, or no SHA256SUMS at all is a refusal by name with one stderr line, and the
-loader steps aside exactly as it does for an absent binary.  A path outside the package with no SHA256SUMS beside it (a JIT build, a
-developer's --prebuilt-root) is not a shipped binary and is not checked.  The loader families are exercised on their refusal branch.
+Offline: every compiled binary under opt_core/ (.so, .cubin, .cubin.xz) remains covered by a SHA256SUMS file verifiable via
+tools/binary_sums.py --check.
+Runtime: gates.binary_refusal() and kernel loaders perform structural presence, ABI, and symbol checks only — never hashing files or
+running first-use GPU numerical self-probes on the serving/load path.
 """
 import hashlib
+import importlib.machinery
 import importlib.util
+import inspect
 import json
+import lzma
 import os
-import shutil
 import sys
+import types
 
 import pytest
 
@@ -35,7 +37,7 @@ def _sha(b: bytes) -> str:
 
 @pytest.fixture()
 def fresh(monkeypatch):
-    """Empty verdict caches for the test (the process-wide ones are restored after)."""
+    """Empty caches for the test (the process-wide ones are restored after)."""
     monkeypatch.setattr(gates, "_BINARY_VERDICTS", {})
     monkeypatch.setattr(gates, "_SUMS_READ", {})
     monkeypatch.setattr(gates, "BINARIES_HELD", [])
@@ -44,24 +46,23 @@ def fresh(monkeypatch):
 
 @pytest.fixture()
 def fakepkg(tmp_path, monkeypatch, fresh):
-    """A stand-in package directory: binary_refusal bounds its upward SHA256SUMS search at gates._PACKAGE_DIR."""
+    """A stand-in package directory for synthetic tests."""
     pkg = tmp_path / "pkg"
     (pkg / "a" / "b").mkdir(parents=True)
     monkeypatch.setattr(gates, "_PACKAGE_DIR", str(pkg))
     return pkg
 
 
-# ----------------------------------------------------------------------------------------------------------- the tree as shipped
+# ----------------------------------------------------------------------------------------------------------- offline SHA256SUMS tooling
 
 def test_every_shipped_binary_is_a_sha256sums_line_with_its_digest(fresh):
     tool = _tool()
     bins = tool.binaries(PKG)
     assert len(bins) > 0
-    assert tool.check(PKG) == [], "\n".join(tool.check(PKG))            # the tool's reading of the rule
+    assert tool.check(PKG) == [], "\n".join(tool.check(PKG))
     refused = [(os.path.relpath(p, PKG), gates.binary_refusal(p)) for p in bins if gates.binary_refusal(p) is not None]
-    assert refused == []                                                 # the loaders' reading of the rule: nothing shipped is refused
-    assert len(gates.BINARIES_HELD) == len(bins)
-    for p in bins:                                                       # and every one is covered by a SHA256SUMS at or above its own directory, inside the package
+    assert refused == []
+    for p in bins:
         sums_path, key = gates.binary_sums_for(p)
         assert sums_path.startswith(PKG + os.sep) and "/" + key == "/" + os.path.relpath(p, os.path.dirname(sums_path)).replace(os.sep, "/")
 
@@ -77,75 +78,18 @@ def test_every_sha256sums_beside_a_binary_is_in_sha256sum_format():
             assert not rel.startswith("/") and ".." not in rel.split("/"), (s, n)
 
 
-# ------------------------------------------------------------------------------------------------------------------- the rule
-
-def test_listed_and_equal_passes_and_is_held(fakepkg, capsys):
-    so = fakepkg / "a" / "b" / "x.so"; so.write_bytes(b"\x7fELF-x")
-    (fakepkg / "a" / "b" / "SHA256SUMS").write_text("%s  x.so\n" % _sha(b"\x7fELF-x"))
-    assert gates.binary_refusal(str(so)) is None
-    assert gates.BINARIES_HELD == [("a/b/x.so", _sha(b"\x7fELF-x")[:16])]
-    assert capsys.readouterr().err == ""
-
-
-def test_the_nearest_sha256sums_above_the_binary_covers_it(fakepkg):
-    cub = fakepkg / "a" / "b" / "k.cubin"; cub.write_bytes(b"cubin-bytes")
-    (fakepkg / "a" / "SHA256SUMS").write_text("%s  b/k.cubin\n" % _sha(b"cubin-bytes"))
-    assert gates.binary_sums_for(str(cub)) == (str(fakepkg / "a" / "SHA256SUMS"), "b/k.cubin")
-    assert gates.binary_refusal(str(cub)) is None
-
-
-def test_a_sha256sums_that_does_not_list_the_binary_does_not_shadow_one_above_that_does(fakepkg):
+def test_binary_sums_for_resolves_nearest_listing_sha256sums(fakepkg, tmp_path):
     cub = fakepkg / "a" / "b" / "k.cubin"; cub.write_bytes(b"k")
     (fakepkg / "a" / "b" / "SHA256SUMS").write_text("%s  other.so\n" % _sha(b"o"))
     (fakepkg / "a" / "SHA256SUMS").write_text("%s  b/k.cubin\n" % _sha(b"k"))
     assert gates.binary_sums_for(str(cub)) == (str(fakepkg / "a" / "SHA256SUMS"), "b/k.cubin")
-    assert gates.binary_refusal(str(cub)) is None
-    so = fakepkg / "a" / "b" / "u.so"; so.write_bytes(b"u")                # listed nowhere: named against the nearest SHA256SUMS
+    so = fakepkg / "a" / "b" / "u.so"; so.write_bytes(b"u")
     assert gates.binary_sums_for(str(so)) == (str(fakepkg / "a" / "b" / "SHA256SUMS"), None)
-    assert gates.binary_refusal(str(so)) == "not listed in a/b/SHA256SUMS"
-
-
-def test_altered_bytes_are_refused_by_name_once_on_stderr(fakepkg, capsys):
-    so = fakepkg / "a" / "x.so"; so.write_bytes(b"altered")
-    (fakepkg / "a" / "SHA256SUMS").write_text("%s  x.so\n" % _sha(b"original"))
-    why = gates.binary_refusal(str(so))
-    assert why == "sha256 %s != a/SHA256SUMS %s" % (_sha(b"altered")[:16], _sha(b"original")[:16])
-    assert gates.binary_refusal(str(so)) == why                          # one verdict per path per process: no second hash, no second line
-    err = capsys.readouterr().err
-    assert err == "[opt_core] SHA256SUMS: refused a/x.so: %s\n" % why
-    assert gates.BINARIES_HELD == []
-
-
-def test_unlisted_binary_beside_a_sha256sums_is_refused(fakepkg, capsys):
-    so = fakepkg / "a" / "y.so"; so.write_bytes(b"y")
-    (fakepkg / "a" / "SHA256SUMS").write_text("%s  x.so\n" % _sha(b"x"))
-    assert gates.binary_refusal(str(so)) == "not listed in a/SHA256SUMS"
-    assert "refused a/y.so: not listed" in capsys.readouterr().err
-
-
-def test_a_binary_with_no_sha256sums_inside_the_package_is_refused(fakepkg, tmp_path):
-    so = fakepkg / "a" / "b" / "z.so"; so.write_bytes(b"z")
-    (tmp_path / "SHA256SUMS").write_text("%s  pkg/a/b/z.so\n" % _sha(b"z"))   # above the package directory: never consulted
-    assert gates.binary_sums_for(str(so)) is None
-    assert gates.binary_refusal(str(so)) == "no SHA256SUMS in or above its directory lists it"
-
-
-def test_the_bytes_already_read_are_what_is_hashed(fakepkg):
-    so = fakepkg / "a" / "x.so"; so.write_bytes(b"on-disk")
-    (fakepkg / "a" / "SHA256SUMS").write_text("%s  x.so\n" % _sha(b"on-disk"))
-    assert gates.binary_refusal(str(so), data=b"in-hand") == "sha256 %s != a/SHA256SUMS %s" % (_sha(b"in-hand")[:16], _sha(b"on-disk")[:16])
-
-
-def test_a_path_outside_the_package_is_checked_only_when_its_directory_carries_sums(fakepkg, tmp_path, capsys):
-    out = tmp_path / "elsewhere"; out.mkdir()
-    so = out / "jit.so"; so.write_bytes(b"jit")
-    assert gates.binary_refusal(str(so)) is None and gates.BINARIES_HELD == []      # not a shipped binary: unchecked, not held
-    so2 = out / "dev.so"; so2.write_bytes(b"dev")
-    (out / "SHA256SUMS").write_text("%s  dev.so\n%s  jit2.so\n" % (_sha(b"dev"), "0" * 64))
-    assert gates.binary_refusal(str(so2)) is None
-    so3 = out / "jit2.so"; so3.write_bytes(b"jit2")
-    assert gates.binary_refusal(str(so3)).startswith("sha256 ")
-    assert "refused %s: sha256" % so3 in capsys.readouterr().err
+    (tmp_path / "SHA256SUMS").write_text("%s  pkg/a/b/z.so\n" % _sha(b"z"))
+    z = fakepkg / "a" / "b" / "z.so"; z.write_bytes(b"z")
+    (fakepkg / "a" / "b" / "SHA256SUMS").unlink()
+    (fakepkg / "a" / "SHA256SUMS").unlink()
+    assert gates.binary_sums_for(str(z)) is None
 
 
 def test_the_tool_writes_sums_only_where_no_sha256sums_above_lists_the_binary(tmp_path):
@@ -153,7 +97,7 @@ def test_the_tool_writes_sums_only_where_no_sha256sums_above_lists_the_binary(tm
     pkg = tmp_path / "pkg"; (pkg / "k" / "prebuilt" / "s1").mkdir(parents=True); (pkg / "p" / "v1" / "build").mkdir(parents=True)
     (pkg / "k" / "prebuilt" / "s1" / "e.so").write_bytes(b"e"); (pkg / "k" / "prebuilt" / "s1" / "manifest.json").write_text("{}")
     (pkg / "p" / "v1" / "build" / "u.cubin").write_bytes(b"u")
-    (pkg / "p" / "v1" / "SHA256SUMS").write_text("%s  build/u.cubin\n%s  README.md\n" % (_sha(b"u"), "0" * 64))   # a payload root's own SHA256SUMS is left as it is
+    (pkg / "p" / "v1" / "SHA256SUMS").write_text("%s  build/u.cubin\n%s  README.md\n" % (_sha(b"u"), "0" * 64))
     assert [os.path.relpath(p, str(pkg)) for p, n in tool.write(str(pkg))] == ["k/prebuilt/s1/SHA256SUMS"]
     assert (pkg / "k" / "prebuilt" / "s1" / "SHA256SUMS").read_text() == "%s  e.so\n" % _sha(b"e")
     assert tool.check(str(pkg)) == []
@@ -161,138 +105,367 @@ def test_the_tool_writes_sums_only_where_no_sha256sums_above_lists_the_binary(tm
     assert tool.check(str(pkg)) == ["p/v1/build/u.cubin: sha256 differs from p/v1/SHA256SUMS"]
 
 
-# ------------------------------------------------------------------------------------- the loaders refuse exactly where absence refuses
+# ----------------------------------------------------------------------------------------------------------- runtime presence-only rule
 
-def _refuse(monkeypatch, path, why="sha256 0000000000000000 != SHA256SUMS ffffffffffffffff"):
-    """Seed the process verdict for one shipped path: what binary_refusal returns after a mismatch."""
-    monkeypatch.setitem(gates._BINARY_VERDICTS, os.path.abspath(path), why)
-    return why
+def test_binary_refusal_checks_presence_only_without_hashing(fakepkg, tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(gates, "sha256_file", lambda *a, **k: pytest.fail("runtime binary_refusal must not hash files"))
+    monkeypatch.setattr(hashlib, "sha256", lambda *a, **k: pytest.fail("runtime binary_refusal must not call hashlib.sha256"))
 
+    so = fakepkg / "a" / "x.so"; so.write_bytes(b"any-bytes")
+    assert gates.binary_refusal(str(so)) is None                                # no SHA256SUMS needed at runtime
+    (fakepkg / "a" / "SHA256SUMS").write_text("%s  x.so\n" % ("0" * 64))
+    assert gates.binary_refusal(str(so)) is None                                # mismatched SHA256SUMS ignored at runtime
 
-def test_triattn_native_wrapper_holds_every_extension_of_a_stack(fresh, monkeypatch):
-    from opt_core.kernels.triattn import triattn_native as W
-    key = sorted(W.stacks_built())[0]
-    rep = W.verify_manifests(key)                                        # as shipped: every extension of the stack passes and is listed as held
-    held = {rel for rel, _ in gates.BINARIES_HELD}
-    for ext in rep:
-        assert os.path.relpath(os.path.join(W.payload_dir(), "prebuilt", key, ext + ".so"), PKG).replace(os.sep, "/") in held
-    ext = sorted(rep)[0]
-    why = _refuse(monkeypatch, os.path.join(W.payload_dir(), "prebuilt", key, ext + ".so"))
-    with pytest.raises(W.Unavailable) as ei:
-        W.verify_manifests(key)
-    assert ei.value.kind == "digest:%s:SHA256SUMS" % ext and why in str(ei.value)
+    missing_in = fakepkg / "a" / "missing.so"
+    assert gates.binary_refusal(str(missing_in)) == "missing: a/missing.so"
 
+    missing_out = tmp_path / "elsewhere" / "missing.so"
+    assert gates.binary_refusal(str(missing_out)) == f"missing: {os.path.abspath(str(missing_out))}"
 
-def test_esm_v61_wrapper_holds_the_payload_cubins(fresh, monkeypatch):
-    from opt_core.kernels.trimul import esm_v61 as E
-    E.verify_digests()
-    cubins = sorted(rel for rel in E.DIGESTS if rel.endswith(".cubin"))
-    assert cubins and {os.path.relpath(os.path.join(E.pkg_dir(""), rel), PKG) for rel in cubins} <= {rel for rel, _ in gates.BINARIES_HELD}
-    _refuse(monkeypatch, os.path.join(E.pkg_dir(""), cubins[0]))
-    with pytest.raises(E.Unavailable) as ei:
-        E.verify_digests()
-    assert str(ei.value.kind if hasattr(ei.value, "kind") else ei.value).startswith("digest:%s(" % cubins[0]) or ("digest:%s(" % cubins[0]) in str(ei.value)
+    assert gates.binary_refusal(str(missing_in), data=b"in-hand") is None       # bytes already in memory: accepted without disk/hash
+    assert capsys.readouterr().err == ""
 
 
-def test_ln_ext_loader_refuses_before_its_manifest_digest(fakepkg):
+# ----------------------------------------------------------------------------------------------------------- runtime loader contracts
+
+def test_ln_ext_loader_checks_presence_only(fakepkg, monkeypatch):
     from opt_core.kernels.ln import ext_loader as L
+    monkeypatch.setattr(L, "_sha256", lambda *a, **k: pytest.fail("ln.ext_loader must not hash .so at runtime"))
     so = fakepkg / "a" / "fast_layernorm_ext.so"; so.write_bytes(b"so-bytes")
-    m = {"_so": str(so), "_key": "torch9.9.9+cu130-cp311", "so_sha256": _sha(b"so-bytes")}
     (fakepkg / "a" / "SHA256SUMS").write_text("%s  fast_layernorm_ext.so\n" % ("0" * 64))
+    m = {"_so": str(so), "_key": "torch9.9.9+cu130-cp311", "so_sha256": "0" * 64}
+    L._check_digest(m)                                                          # existing file passes without SHA256 check
+
+    so.unlink()
     with pytest.raises(L.Unavailable) as ei:
         L._check_digest(m)
-    assert "so_refused:torch9.9.9+cu130-cp311(sha256 " in str(ei.value)
-    gates._BINARY_VERDICTS.clear(); gates._SUMS_READ.clear()
-    (fakepkg / "a" / "SHA256SUMS").write_text("%s  fast_layernorm_ext.so\n" % _sha(b"so-bytes"))
-    L._check_digest(m)                                                   # listed and equal: on to the manifest's own digest, which agrees
+    assert "no_prebuilt:torch9.9.9+cu130-cp311" in str(ei.value)
 
 
-def test_flash_transition_steps_past_a_refused_sealed_prebuilt_to_its_store(fresh, tmp_path, monkeypatch):
+def test_flash_transition_checks_presence_and_abi_without_hashing(fresh, tmp_path, monkeypatch):
     torch = pytest.importorskip("torch")
     from opt_core.kernels import transition as TR
     FT = TR.carried_module("flash_sm90a")
-    src = os.path.join(PKG, "kernels", "transition", "flash_sm90a", "prebuilt")
-    key = sorted(d for d in os.listdir(src) if os.path.isfile(os.path.join(src, d, "manifest.json")))[0]
-    dst = tmp_path / "prebuilt" / key
-    shutil.copytree(os.path.join(src, key), str(dst))
-    monkeypatch.setattr(FT, "prebuilt_dir", lambda: str(dst))
-    man = json.load(open(dst / "manifest.json"))
-    assert TR._sealed_prebuilt_refusal(FT) is None                       # a copy outside the package with no SHA256SUMS beside it: not a shipped binary
-    gates._BINARY_VERDICTS.clear(); gates._SUMS_READ.clear()
+
+    dst = tmp_path / "prebuilt_cell"
+    dst.mkdir()
+    pytag = f"cp{sys.version_info[0]}{sys.version_info[1]}"
+    man = {
+        "so": "flash_transition_sm90a.so",
+        "module_name": "flash_transition_sm90a_stub",
+        "torch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "python_tag": pytag,
+        "so_sha256": "0" * 64,
+        "source_sha256": {"missing.cu": "0" * 64},
+    }
+    (dst / "manifest.json").write_text(json.dumps(man))
+    (dst / man["so"]).write_bytes(b"stub-so")
     (dst / "SHA256SUMS").write_text("%s  %s\n" % ("0" * 64, man["so"]))
-    why = TR._sealed_prebuilt_refusal(FT)
-    assert why.startswith("prebuilt %s refused: sha256 " % man["so"])
-    monkeypatch.setattr(FT, "load", lambda *a, **k: pytest.fail("the sealed loader must not be called for a refused prebuilt"))
-    monkeypatch.setattr(TR, "_FLASH_EXT", {})
-    # (a) an empty store: no binary for any interpreter, so the outcome names the sealed refusal on every stack
-    monkeypatch.setattr(TR, "FLASH_STORE", "flash_prebuilt_none")
-    with pytest.raises(RuntimeError) as ei:
-        TR._flash_ext()
-    assert str(ei.value) == "flash_transition: no prebuilt for %s (sealed loader: %s)" % (TR.flash_abi_key(), why)
-    # (b) the store as shipped: an interpreter it holds a binary for (torch build + CPython ABI) is served from the store, past the refused
-    #     sealed prebuilt; any other interpreter is refused by name with both reasons
-    monkeypatch.undo()
+
     monkeypatch.setattr(FT, "prebuilt_dir", lambda: str(dst))
-    monkeypatch.setattr(FT, "load", lambda *a, **k: pytest.fail("the sealed loader must not be called for a refused prebuilt"))
-    monkeypatch.setattr(TR, "_FLASH_EXT", {})
-    monkeypatch.setattr(gates, "_BINARY_VERDICTS", {}); monkeypatch.setattr(gates, "_SUMS_READ", {}); monkeypatch.setattr(gates, "BINARIES_HELD", [])
-    ent = (TR.flash_store_manifest().get("binaries") or {}).get(TR.flash_abi_key())
-    if ent is not None and ent.get("torch") == torch.__version__ and ent.get("cuda") == torch.version.cuda:
-        try:
-            mod = TR._flash_ext()
-        except Exception as e:  # noqa: BLE001  the store binary could not be mapped in this process (no device libraries): still past the sealed refusal
-            assert "no prebuilt for" not in str(e) and why not in str(e), str(e)
-        else:
-            assert hasattr(mod, "flash_transition")
-            assert any(rel.endswith(ent["so"]) for rel, _ in gates.BINARIES_HELD)      # the store binary itself was held to its SHA256SUMS first
-    else:
-        with pytest.raises(RuntimeError) as ei:
-            TR._flash_ext()
-        msg = str(ei.value)
-        assert msg.startswith("flash_transition:") and (why in msg or "store binary" in msg), msg
+    monkeypatch.setattr(FT, "_EXT", None)
+    monkeypatch.setattr(FT, "_sha", lambda *a, **k: pytest.fail("flash_sm90a.load must not hash files at runtime"))
+
+    # Sealed presence helper ignores mismatched SHA256SUMS and flags absence
+    assert TR._sealed_prebuilt_refusal(FT) is None
+
+    # Direct load via stubbed extension loader checks symbols without hashing
+    stub_mod = types.ModuleType(man["module_name"])
+    for sym in ("flash_transition", "silu_table", "smem_bytes", "hidden_chunk"):
+        setattr(stub_mod, sym, lambda *a, **k: None)
+
+    class _FakeLoader:
+        def __init__(self, name, path):
+            self.name = name
+            self.path = path
+        def create_module(self, spec):
+            return stub_mod
+        def exec_module(self, module):
+            pass
+
+    monkeypatch.setattr(importlib.machinery, "ExtensionFileLoader", _FakeLoader)
+    loaded = FT.load()
+    assert loaded is stub_mod
+
+    # Missing symbol refused
+    monkeypatch.setattr(FT, "_EXT", None)
+    delattr(stub_mod, "flash_transition")
+    with pytest.raises(RuntimeError, match="lacks symbol flash_transition"):
+        FT.load()
+
+    # ABI mismatch (python tag / torch) refused
+    monkeypatch.setattr(FT, "_EXT", None)
+    man_bad_py = dict(man, python_tag="cp999")
+    (dst / "manifest.json").write_text(json.dumps(man_bad_py))
+    with pytest.raises(RuntimeError, match="prebuilt python tag"):
+        FT.load()
+
+    man_bad_torch = dict(man, torch="0.0.0+fake")
+    (dst / "manifest.json").write_text(json.dumps(man_bad_torch))
+    with pytest.raises(RuntimeError, match="prebuilt was built for torch"):
+        FT.load()
+
+    # Missing .so refused by both sealed check and load()
+    (dst / "manifest.json").write_text(json.dumps(man))
+    (dst / man["so"]).unlink()
+    assert TR._sealed_prebuilt_refusal(FT) == "prebuilt flash_transition_sm90a.so missing"
+    with pytest.raises(RuntimeError, match="missing"):
+        FT.load()
 
 
-def test_cuda_sm90a_refuses_an_altered_prebuilt_by_name(fresh, tmp_path, monkeypatch):
+def test_cuda_sm90a_checks_presence_and_abi_without_hashing_or_loadcheck(fresh, tmp_path, monkeypatch):
     torch = pytest.importorskip("torch")
     from opt_core.kernels.triattn import cuda_sm90a as C
+
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
     monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *a, **k: (9, 0))
+    monkeypatch.setattr(torch.cuda, "current_device", lambda: 0)
     monkeypatch.setattr(C, "_EXT", None, raising=False)
-    src = os.path.join(PKG, "kernels", "triattn", "cuda_sm90a", "prebuilt")
-    akey = sorted(d for d in os.listdir(src) if os.path.isfile(os.path.join(src, d, "manifest.json")))[0]
+    monkeypatch.setattr(C, "_INSTALL_REPORT", {})
+    monkeypatch.setattr(C, "_sha", lambda *a, **k: pytest.fail("cuda_sm90a.install must not hash .so at runtime"))
+    monkeypatch.setattr(C, "source_sha256", lambda *a, **k: pytest.fail("cuda_sm90a.install must not hash csrc at runtime"))
+    monkeypatch.setattr(C, "_loadcheck", lambda *a, **k: pytest.fail("cuda_sm90a.install must not run GPU loadcheck at runtime"))
+
     root = tmp_path / "root"
-    dst = root / os.path.basename(C.prebuilt_dir(str(root)))              # the directory install() reads for this interpreter under a given root
-    shutil.copytree(os.path.join(src, akey), str(dst))
-    man = json.load(open(dst / "manifest.json"))
+    dst = root / os.path.basename(C.prebuilt_dir(str(root)))
+    dst.mkdir(parents=True)
+    man = {
+        "so": "triattn_cuda_sm90a.so",
+        "module_name": "triattn_cuda_sm90a_stub",
+        "torch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "so_sha256": "0" * 64,
+        "source_sha256": "0" * 64,
+    }
+    (dst / "manifest.json").write_text(json.dumps(man))
     (dst / "SHA256SUMS").write_text("%s  %s\n" % ("0" * 64, man["so"]))
-    with pytest.raises(C.Refused) as ei:
+
+    # Missing .so refused
+    with pytest.raises(C.Refused, match="so_exists.*false"):
         C.install(prebuilt_root=str(root))
-    assert "refused: sha256 " in str(ei.value)
+
+    # Present .so with wrong torch version refused
+    (dst / man["so"]).write_bytes(b"stub-so")
+    (dst / "manifest.json").write_text(json.dumps(dict(man, torch="0.0.0+fake")))
+    with pytest.raises(C.Refused, match='"torch": false'):
+        C.install(prebuilt_root=str(root))
+
+    # Matching ABI loads directly without SHA256 or GPU loadcheck
+    (dst / "manifest.json").write_text(json.dumps(man))
+    stub_mod = types.SimpleNamespace(
+        fwd=lambda *a, **k: None,
+        stage_bias=lambda *a, **k: None,
+        stage_mask=lambda *a, **k: None,
+        fix_elems=lambda *a, **k: 16,
+        smem_bytes=lambda *a, **k: 0,
+    )
+    monkeypatch.setattr(C, "_load_so", lambda so, name: stub_mod)
+    monkeypatch.setattr(C, "_FIX", {})
+    monkeypatch.setattr(C, "_fix_buffer", lambda dev, n: C._FIX.__setitem__(dev, torch.zeros(n, dtype=torch.int32)))
+
+    rep = C.install(prebuilt_root=str(root))
+    assert rep["route"] == "prebuilt"
+    assert C._EXT is stub_mod
 
 
-def test_exactln_steps_aside_from_a_refused_bundle_as_from_an_absent_one(fresh, monkeypatch):
+def test_apb_dit_exact_loads_without_hashing_or_loadcheck(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    from opt_core.kernels.apb import dit_exact as D
+
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(torch.cuda, "get_device_capability", lambda *a, **k: (9, 0))
+    monkeypatch.setattr(D, "_MOD", None)
+    monkeypatch.setattr(D, "STATS", dict(D.STATS, loadcheck="stale"))
+    monkeypatch.setattr(D, "_sha_file", lambda *a, **k: pytest.fail("dit_exact must not hash .so at runtime"))
+    monkeypatch.setattr(D, "source_sha256", lambda *a, **k: pytest.fail("dit_exact must not hash csrc at runtime"))
+    monkeypatch.setattr(D, "run_loadcheck", lambda *a, **k: pytest.fail("dit_exact must not run GPU loadcheck at runtime"))
+
+    key = "stub_stack"
+    pdir = tmp_path / key
+    pdir.mkdir()
+    monkeypatch.setattr(D, "prebuilt_dir", lambda k=None: str(pdir))
+    man = {
+        "so": "dit_attn_exact.so",
+        "module_name": "dit_attn_exact_stub",
+        "torch": torch.__version__,
+        "cuda": torch.version.cuda,
+        "arch": ["sm90"],
+        "kernel_version": "1.0.0",
+        "so_sha256": "0" * 64,
+        "source_sha256": "0" * 64,
+    }
+    (pdir / "manifest.json").write_text(json.dumps(man))
+
+    # Missing .so refused
+    with pytest.raises(RuntimeError, match="missing"):
+        D.load_prebuilt(key)
+
+    # Torch/CUDA ABI mismatch refused
+    (pdir / man["so"]).write_bytes(b"stub-so")
+    (pdir / "manifest.json").write_text(json.dumps(dict(man, torch="0.0.0+fake")))
+    with pytest.raises(RuntimeError, match="prebuilt built for torch"):
+        D.load_prebuilt(key)
+
+    # Valid manifest + present .so loads directly without hashing or loadcheck
+    (pdir / "manifest.json").write_text(json.dumps(man))
+    inited = []
+    stub_mod = types.ModuleType(man["module_name"])
+    stub_mod.version = "1.0.0"
+    stub_mod.init = lambda: inited.append(True)
+
+    class _FakeLoader:
+        def __init__(self, name, path):
+            self.name = name
+            self.path = path
+        def create_module(self, spec):
+            return stub_mod
+        def exec_module(self, module):
+            pass
+
+    monkeypatch.setattr(importlib.machinery, "ExtensionFileLoader", _FakeLoader)
+    mod = D.load_prebuilt(key)
+    assert mod is stub_mod
+    assert inited == [True]
+    assert D.STATS["loadcheck"] is None
+
+
+def test_triattn_exact_cubin_bytes_checks_size_without_sha256(tmp_path, monkeypatch):
+    torch = pytest.importorskip("torch")
+    from opt_core.kernels.triattn_exact import _prebuilt as P
+    if hasattr(torch, "compiler") and hasattr(torch.compiler, "disable"):
+        monkeypatch.setattr(torch.compiler, "disable", lambda fn: fn)
+    from opt_core.kernels.triattn_exact._prebuilt import cuda_mma as CM
+
+    payload = b"synthetic-cubin-bytes"
+    blob = tmp_path / "k.cubin.xz"
+    blob.write_bytes(lzma.compress(payload))
+
+    monkeypatch.setattr(P, "MANIFEST_PATH", str(tmp_path / "manifest.json"))
+    monkeypatch.setattr(P, "_blob_cache", {})
+    monkeypatch.setattr(hashlib, "sha256", lambda *a, **k: pytest.fail("cubin_bytes must not call hashlib.sha256 at runtime"))
+
+    build = {"blob": "k.cubin.xz", "cubin_sha256": "0" * 64, "cubin_bytes": len(payload), "route": "test"}
+    assert P.cubin_bytes(build) == payload
+
+    # Wrong byte length still refused
+    monkeypatch.setattr(P, "_blob_cache", {})
+    bad_build = dict(build, cubin_bytes=len(payload) + 1)
+    with pytest.raises(P.Refused, match="size mismatch"):
+        P.cubin_bytes(bad_build)
+
+    # cuda_mma.resolve does not call tree_fingerprint
+    monkeypatch.setattr(CM, "_loaded", {})
+    monkeypatch.setattr(CM, "tree_fingerprint", lambda *a, **k: pytest.fail("cuda_mma.resolve must not hash source tree at runtime"))
+    monkeypatch.setattr(CM.drv, "backend", lambda: types.SimpleNamespace(driver_version=lambda: 12090))
+    monkeypatch.setattr(CM.drv.Device, "get", staticmethod(lambda idx: types.SimpleNamespace(cc=(9, 0))))
+    monkeypatch.setattr(CM, "select_build", lambda *a, **k: (None, "stubbed"))
+    with pytest.raises(CM.Refused, match="stubbed"):
+        CM.resolve(types.SimpleNamespace(index=0))
+
+
+def test_trimul_tx_sm90a_loads_without_hashing_or_loadcheck(tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    from opt_core.kernels.trimul.tx_sm90a import ops as O
+
+    monkeypatch.setattr(O, "_EXT", None)
+    monkeypatch.setattr(O, "_STATE", {"loaded": None, "calls": 0})
+    monkeypatch.setattr(O, "HERE", str(tmp_path))
+    monkeypatch.setattr(O, "_sha256", lambda *a, **k: pytest.fail("tx_sm90a.ops.load must not hash files at runtime"))
+    monkeypatch.setattr(O, "_loadcheck", lambda *a, **k: pytest.fail("tx_sm90a.ops.load must not run GPU loadcheck at runtime"))
+
+    pre = tmp_path / "prebuilt"
+    pre.mkdir()
+    tag = O.abi_tag()
+    man = {
+        "binaries": {
+            tag: {
+                "file": "tx_sm90a.so",
+                "module": "tx_sm90a_stub",
+                "sha256": "a" * 64,
+                "toolchain": "synthetic",
+            }
+        },
+        "sources": {"csrc/missing.cu": "b" * 64},
+    }
+    (pre / "manifest.json").write_text(json.dumps(man))
+
+    # Missing .so refused
+    with pytest.raises(O.TrimulTxUnavailable, match="absent"):
+        O.load()
+
+    # ABI mismatch refused
+    (pre / "tx_sm90a.so").write_bytes(b"stub-so")
+    (pre / "manifest.json").write_text(json.dumps({"binaries": {"other_abi": man["binaries"][tag]}}))
+    with pytest.raises(O.TrimulTxUnavailable, match="no prebuilt binary for"):
+        O.load()
+
+    # Present .so + matching ABI loads directly without SHA256 or loadcheck
+    (pre / "manifest.json").write_text(json.dumps(man))
+    stub_mod = types.ModuleType("tx_sm90a_stub")
+
+    class _FakeLoader:
+        def create_module(self, spec):
+            return stub_mod
+        def exec_module(self, module):
+            pass
+
+    fake_spec = importlib.machinery.ModuleSpec("tx_sm90a_stub", _FakeLoader())
+    monkeypatch.setattr(importlib.util, "spec_from_file_location", lambda name, path: fake_spec)
+    assert O.load() is stub_mod
+    assert O._STATE["loaded"]["tag"] == tag
+
+
+def test_exactln_prebuilt_index_checks_opts_without_source_hashing(tmp_path, monkeypatch):
     from opt_core.kernels.ln import exactln as X
-    idx = X._prebuilt_index()
-    if not idx or not idx.get("bundles"):
-        pytest.skip("no exactln bundle index in this tree")
-    cc = sorted(idx["bundles"])[0][2:]
-    b = idx["bundles"]["sm" + cc]
-    expr = sorted(b["kernels"])[0]
-    monkeypatch.setattr(X, "_cu", lambda: None)
-    monkeypatch.setitem(X._STATE, "prebuilt_modules", {})
-    why = _refuse(monkeypatch, os.path.join(X.PREBUILT_DIR, b["file"]))
-    assert X._prebuilt_function(expr, cc) is None
-    assert X._STATE["prebuilt_off"] == "bundle %s refused: %s" % (b["file"], why)
+
+    pre = tmp_path / "prebuilt"
+    pre.mkdir()
+    opts = [o.decode() for o in X._opts(None)]
+    idx = {"source_sha256": "0" * 64, "opts": opts, "bundles": {"sm90": {"file": "missing.cubin", "kernels": {"k": "k"}}}}
+    (pre / "index.json").write_text(json.dumps(idx))
+
+    monkeypatch.setattr(X, "PREBUILT_DIR", str(pre))
+    monkeypatch.setattr(X, "_STATE", dict(X._STATE, prebuilt_index=None, prebuilt_off=None, prebuilt_modules={}))
+    monkeypatch.setattr(hashlib, "sha256", lambda *a, **k: pytest.fail("exactln._prebuilt_index must not hash source at runtime"))
+
+    got = X._prebuilt_index()
+    assert got is not None and got["opts"] == opts
+
+    # Missing bundle file returns None cleanly
+    monkeypatch.setattr(X, "_cu", lambda: object())
+    assert X._prebuilt_function("k", "90") is None
+
+    # Mismatched compile options still rejected
+    (pre / "index.json").write_text(json.dumps(dict(idx, opts=["--different-opt"])))
+    monkeypatch.setattr(X, "_STATE", dict(X._STATE, prebuilt_index=None, prebuilt_off=None, prebuilt_modules={}))
+    assert X._prebuilt_index() is None
+    assert X._STATE["prebuilt_off"] == "built with other compile options"
 
 
-def test_triattn_xla_prechecks_report_a_refused_binary_as_they_report_a_missing_one(fresh, monkeypatch):
-    K = pytest.importorskip("opt_core.kernels.triattn_xla._k2b")
-    idx = K.cubin_index()
-    if not idx:
-        pytest.skip("no k2b cubins in this tree")
-    akey = sorted(idx)[0]
-    arch, key = akey.split("/", 1)
-    why = _refuse(monkeypatch, os.path.join(K.PKG_DIR, idx[akey]["file"]))
-    with pytest.raises(K.Refused) as ei:
-        K._load_cubin(arch, key)
-    assert "refused: %s; fallback:" % why in str(ei.value)
+def test_triattn_native_runtime_defaults_skip_digests_and_byte_gate(tmp_path, monkeypatch):
+    from opt_core.kernels.triattn import triattn_native as W
+
+    assert inspect.signature(W.install).parameters["check"].default is False
+
+    # Structural presence helper passes for shipped stack without hashing
+    key = sorted(W.stacks_built())[0]
+    monkeypatch.setattr(hashlib, "sha256", lambda *a, **k: pytest.fail("_check_prebuilt_present must not hash .so"))
+    rep = W._check_prebuilt_present(key)
+    assert rep
+
+    # Missing .so refused by name
+    monkeypatch.setattr(W, "payload_dir", lambda: str(tmp_path))
+    monkeypatch.setattr(W, "stacks_built", lambda: {key: ["triattn_sm90_ext"]})
+    with pytest.raises(W.Unavailable) as ei:
+        W._check_prebuilt_present(key)
+    assert ei.value.kind.startswith("no_prebuilt:")
+
+
+def test_trimul_native_runtime_defaults_skip_digests_and_byte_gate():
+    from opt_core.kernels import trimul as T
+    from opt_core.kernels.trimul import native as N
+
+    assert inspect.signature(N.install).parameters["gate"].default is False
+    assert inspect.signature(N.forward).parameters["gate"].default is False
+    assert inspect.signature(T.native_install).parameters["gate"].default is False
