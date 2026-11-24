@@ -84,36 +84,41 @@ def load(check_source: bool = True):
     global _EXT
     if _EXT is not None:
         return _EXT
+    from opt_core.gates import verify_prebuilt
+
+    verify = verify_prebuilt()
     d = prebuilt_dir()
     man_p = os.path.join(d, "manifest.json")
     if not os.path.isfile(man_p):
         _fail(f"no prebuilt for stack {stack_key()} (looked for {man_p})")
     man = json.load(open(man_p))
     so = os.path.join(d, man["so"])
-    if not os.path.isfile(so):
-        _fail(f"prebuilt .so missing: {so}")
-    if man.get("torch") != torch.__version__ or man.get("cuda") != torch.version.cuda:
-        _fail(f"prebuilt was built for torch {man.get('torch')} / CUDA {man.get('cuda')}, running torch {torch.__version__} / CUDA {torch.version.cuda}")
-    pytag = f"cp{sys.version_info[0]}{sys.version_info[1]}"
-    if man.get("python_tag") != pytag:
-        _fail(f"prebuilt python tag {man.get('python_tag')} != {pytag}")
-    if _sha(so) != man.get("so_sha256"):
-        _fail("sha256 of the prebuilt .so does not match manifest.json")
-    if check_source:
-        for fn, digest in (man.get("source_sha256") or {}).items():
-            p = os.path.join(HERE, "csrc", fn)
-            if not os.path.isfile(p) or _sha(p) != digest:
-                _fail(f"csrc/{fn} does not match the source the prebuilt was built from (manifest source_sha256)")
+    if verify:
+        if not os.path.isfile(so):
+            _fail(f"prebuilt .so missing: {so}")
+        if man.get("torch") != torch.__version__ or man.get("cuda") != torch.version.cuda:
+            _fail(f"prebuilt was built for torch {man.get('torch')} / CUDA {man.get('cuda')}, running torch {torch.__version__} / CUDA {torch.version.cuda}")
+        pytag = f"cp{sys.version_info[0]}{sys.version_info[1]}"
+        if man.get("python_tag") != pytag:
+            _fail(f"prebuilt python tag {man.get('python_tag')} != {pytag}")
+        if _sha(so) != man.get("so_sha256"):
+            _fail("sha256 of the prebuilt .so does not match manifest.json")
+        if check_source:
+            for fn, digest in (man.get("source_sha256") or {}).items():
+                p = os.path.join(HERE, "csrc", fn)
+                if not os.path.isfile(p) or _sha(p) != digest:
+                    _fail(f"csrc/{fn} does not match the source the prebuilt was built from (manifest source_sha256)")
     name = man["module_name"]
     loader = importlib.machinery.ExtensionFileLoader(name, so)
     spec = importlib.util.spec_from_file_location(name, so, loader=loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
-    for sym in ("flash_transition", "silu_table", "smem_bytes", "hidden_chunk"):
-        if not hasattr(mod, sym):
-            _fail(f"prebuilt module lacks symbol {sym}")
+    if verify:
+        for sym in ("flash_transition", "silu_table", "smem_bytes", "hidden_chunk"):
+            if not hasattr(mod, sym):
+                _fail(f"prebuilt module lacks symbol {sym}")
     _EXT = mod
-    _STATE["prebuilt"] = {"dir": os.path.relpath(d, HERE), "so": man["so"], "so_sha256": man["so_sha256"][:12], "built_from": man.get("source_commit", "?")}
+    _STATE["prebuilt"] = {"dir": os.path.relpath(d, HERE), "so": man["so"], "so_sha256": str(man.get("so_sha256", ""))[:12], "built_from": man.get("source_commit", "?")}
     return mod
 
 
@@ -351,17 +356,21 @@ def install(verbose: bool = True, ln: Optional[bool] = None) -> Dict[str, Any]:
                 CORE_ORIGINALS[id(f)] = f
     if CORE_FN_RESIDUAL is None:
         CORE_FN_RESIDUAL, CORE_FN = mods[0].fn_residual, mods[0].fn
-    rep = load_check()
-    _STATE["loadcheck"] = rep
-    if not rep.get("ok"):
-        _fail("load-time check failed: " + str(rep.get("why")))
+    from opt_core.gates import verify_prebuilt
+    check = "prepared"
+    if verify_prebuilt():
+        rep = load_check()
+        _STATE["loadcheck"] = rep
+        if not rep.get("ok"):
+            _fail("load-time check failed: " + str(rep.get("why")))
+        check = f"silu65536+tiles({','.join(str(m) for m in LOADCHECK_TILES)}){'+lnrows' if _STATE['ln'] else ''}"
     for m in mods:
         m.fn_residual = fn_residual
         m.fn = fn
     _STATE["rebound_modules"] = [m.__name__ for m in mods]
     _STATE["installed"] = True; _STATE["why"] = ""
     _STATE["marker"] = (f"on(sm90a,prebuilt={_STATE['prebuilt']['dir']},cell={CELL[0]}x{CELL[1]},class=EXACT,ln={'fused' if _STATE['ln'] else 'module'},"
-                        f"loadcheck=silu65536+tiles({','.join(str(m) for m in LOADCHECK_TILES)}){'+lnrows' if _STATE['ln'] else ''},{time.time() - t0:.1f}s)")
+                        f"loadcheck={check},{time.time() - t0:.1f}s)")
     if verbose:
         print(f"[{UNIT}] installed: {_STATE['marker']} (opt_core fpf_transition.fn_residual/fn rebound; other cells -> opt_core)", file=sys.stderr, flush=True)
     return stats()

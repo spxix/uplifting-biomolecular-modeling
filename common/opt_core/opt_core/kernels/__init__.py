@@ -58,21 +58,25 @@ def _live_files(name: str, kind: str) -> List[str]:
     return sorted(os.path.basename(p) for p in glob.glob(os.path.join(KERNELS_DIR, name + ".*")))
 
 
-def sums(name: str) -> dict:
-    """The metadata of ``name``: kind, version, license, not_carried, exports, runtime_imports, and ``files`` -- the live file
-    list (relative paths), computed now, not stored."""
+def _metadata(name: str) -> dict:
     path = os.path.join(META_DIR, name + ".json")
-    if not os.path.isfile(path):
-        raise KeyError(f"no carried kernel {name!r} (carried: {', '.join(names())})")
-    with open(path, encoding="utf-8") as fh:
-        doc = json.load(fh)
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except FileNotFoundError as exc:
+        raise KeyError(f"no carried kernel {name!r} (carried: {', '.join(names())})") from exc
+
+
+def sums(name: str) -> dict:
+    """The metadata of ``name``, including its live file list (relative paths)."""
+    doc = _metadata(name)
     doc["files"] = _live_files(name, doc["kind"])
     return doc
 
 
 def carried_path(name: str) -> str:
     """The core copy: the package directory or the module file."""
-    return os.path.join(KERNELS_DIR, name if sums(name)["kind"] == "package" else name + ".py")
+    return os.path.join(KERNELS_DIR, name if _metadata(name)["kind"] == "package" else name + ".py")
 
 
 def carried_files() -> List[str]:
@@ -189,7 +193,7 @@ def resolve(name: str, path: Optional[List[str]] = None) -> Optional[str]:
 
 def exports(name: str, **values) -> Dict[str, str]:
     """The environment a kit exports BEFORE importing ``name``: each export names its parameter; a required one missing raises by name."""
-    doc = sums(name)
+    doc = _metadata(name)
     env = {}
     for var, spec in sorted(doc.get("exports", {}).items()):
         val = values.get(spec["param"])

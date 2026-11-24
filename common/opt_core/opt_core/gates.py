@@ -42,6 +42,11 @@ from dataclasses import dataclass, field
 from typing import Callable, Iterable, Mapping, Optional, Sequence, Tuple
 
 
+def verify_prebuilt() -> bool:
+    """Whether to repeat prebuilt artifact verification in the running process."""
+    return os.environ.get("OPT_CORE_VERIFY_PREBUILT") != "0"
+
+
 def word(key: str, value=None, *parts) -> str:
     """:func:`opt_core.report.word`, imported on first use: a stock process under the deterministic recipe imports this module
     (``precision.recipe`` -> ``precision.policy`` -> ``gates``) and may hold no core module beyond the recipe's own, so ``opt_core.report``

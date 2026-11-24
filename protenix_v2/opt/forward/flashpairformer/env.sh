@@ -22,7 +22,7 @@ if [ "$_fpf_arm" = "T" ]; then                                                  
 fi
 export PTX_KEEP_POOL=1        # v0.6.2 lever keep_pool (exact class, allocator policy, both arms): stock's empty_cache() calls inside the model forward (confidence head) are no-ops; kit releases and the per-item runner release pass through
 export PTX_SUMMARY_HOST=1     # v0.6.2 lever summary_hostidx (exact-bitwise, both arms): summary-confidence chain / chain-pair bookkeeping from one host copy of the id rows; identical GPU value ops, ~2500 -> ~10 stream syncs per item
-if [ "${DEADSKIP:-1}" != "0" ]; then export PTX_DEADSKIP=$FPF_HOME/src/deadskip_manifest.json; else unset PTX_DEADSKIP; fi   # v0.1: ON by default (tested byte-identical e2e incl. confidence JSON; DEADSKIP=0 to disable)
+if [ "${OPT_CORE_VERIFY_PREBUILT:-1}" != "0" ] && [ "${DEADSKIP:-1}" != "0" ]; then export PTX_DEADSKIP=$FPF_HOME/src/deadskip_manifest.json; else unset PTX_DEADSKIP; fi
 export PTX_LEVER_REPORT=${PTX_LEVER_REPORT:-${XDG_CACHE_HOME:-$HOME/.cache}/protenix_v2_opt/fpf_lever_report.jsonl}   # the levers' end-of-run report (JSON lines, appended and read back): a file under the user's own cache directory unless the caller names one (the package's pred verb names one in the run's records) — never a fixed name in the shared /tmp; the directory is made private (0700) by the Python side before anything is appended
 
 #  PTX_BLK_CHUNKED=1|mirror|unchunked|k2b|0 : (default 1 under ARM=E, k2b under ARM=T) chunk-aware BLK2 tri-attention core for N_token > 1024 (stock passes chunk_size 512/256): EXACT per-row-chunk cuEq + in-place epilogue (L2b CLI DET 6/6 @1493, L4 op/full-block 24/24+12/12); 0 = v0.3 behaviour (stock block above 1024)

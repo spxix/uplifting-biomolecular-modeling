@@ -19,10 +19,10 @@
    "transform": "verbatim-plus-cache-directory-rule: cache_root's default is per user, cache_dir returns only a directory no other account could have written (_private_cache_dir)"
   },
   "_prebuilt/__init__.py": {
-   "carried_sha256": "fe366d8c351d7c243252bba4dbf09f1ef690f99900c9af92e8f0f417d5c608a2",
+   "carried_sha256": "818dc89448b53a5ab449f412c83270c486e871e37a51575ec1afab9461a40be7",
    "checkpoint_path": "triattn_exact/_prebuilt/__init__.py",
    "checkpoint_sha256": "70eb7e71cf450caca71f1ca1511aa5c6f3787e7485e104fb7c6f8d31c268f2b0",
-   "transform": "verbatim-plus-cache-directory-rule: the cache_dir fallback (taken only without _paths) returns only a directory no other account could have written (_private_dir)"
+   "transform": "verbatim-plus-cache-directory-rule: the cache_dir fallback (taken only without _paths) returns only a directory no other account could have written (_private_dir); local prepared-artifact loading option"
   },
   "_prebuilt/blobs/cuda_mma-v3.3-srca1ceadcb993c-sm_80-cuda12_6.cubin.xz": {
    "carried_sha256": "2b6252db1fa01fc468764bfe546390b3d93f155241e394e7390a9d278758bb58",
@@ -61,10 +61,10 @@
    "transform": "verbatim"
   },
   "_prebuilt/cuda_mma.py": {
-   "carried_sha256": "f91170e2619c29ec7c4edea7ec3f13f763fbddc7b55ce2faa054ea2c93f39700",
+   "carried_sha256": "b82eaf06a1f1471ade61dbbbdc171a8344dc540ea0c1db0afa7b1eb0dd791f79",
    "checkpoint_path": "triattn_exact/_prebuilt/cuda_mma.py",
    "checkpoint_sha256": "f91170e2619c29ec7c4edea7ec3f13f763fbddc7b55ce2faa054ea2c93f39700",
-   "transform": "verbatim"
+   "transform": "verbatim; local prepared-artifact loading option"
   },
   "_prebuilt/driver.py": {
    "carried_sha256": "c444545fda3705cde897e79478cef1eb772add6697d5c5f3fb9e61d73dee0798",
@@ -91,10 +91,10 @@
    "transform": "ast-equal-narration-stripped+message-literals"
   },
   "face.py": {
-   "carried_sha256": "16a66a23e3e56c968e3c3feb77bc59bf4547776afbb6ac235cd6c1bb3de52267",
+   "carried_sha256": "f12fa86019f6316500cce341885f0535bedd288b19a832ce4fc7b561c431c81d",
    "checkpoint_path": "triattn_exact/face.py",
    "checkpoint_sha256": "770de6853511504b5193cf0e0487fc950e7b9fc45134b3e2e06bcbc76ba2af52",
-   "transform": "ast-equal-narration-stripped"
+   "transform": "ast-equal-narration-stripped; local prepared-artifact loading option"
   }
  },
  "cells": {
@@ -106,19 +106,19 @@
   "CELLS.json": "9e8ed8d08c691146d9d75becd0b25d2bec72aae266a645bb0a5d126e174f0359",
   "__init__.py": "4ef16e29f2e088bc8b81a8e74639d646e996a15a40053ba9d7d680aeba18aabb",
   "_paths.py": "a9a8ff3b4f578d08fa03bd1a436f8428ab38751df97c942467146cfc7cf89461",
-  "_prebuilt/__init__.py": "fe366d8c351d7c243252bba4dbf09f1ef690f99900c9af92e8f0f417d5c608a2",
+  "_prebuilt/__init__.py": "818dc89448b53a5ab449f412c83270c486e871e37a51575ec1afab9461a40be7",
   "_prebuilt/blobs/cuda_mma-v3.3-srca1ceadcb993c-sm_80-cuda12_6.cubin.xz": "2b6252db1fa01fc468764bfe546390b3d93f155241e394e7390a9d278758bb58",
   "_prebuilt/blobs/cuda_mma-v3.3-srca1ceadcb993c-sm_80-cuda13_0.cubin.xz": "2493acd2126f77a2e2ff8af486859ec03aff173602b62a8a794cf65445c41de2",
   "_prebuilt/blobs/cuda_mma-v3.3-srca1ceadcb993c-sm_90-cuda12_6.cubin.xz": "730ca9f4fbb1653995fb227831dc57cfb2423bce5331447ae91dc5df7cba6456",
   "_prebuilt/blobs/cuda_mma-v3.3-srca1ceadcb993c-sm_90-cuda13_0.cubin.xz": "f4f1891ea2f8768f792ebee5bad03cab9edbb2af4a637073f6936aa5d0ce7849",
   "_prebuilt/blobs/cuda_mma-v3.3-srca1ceadcb993c-sm_90a-cuda12_6.cubin.xz": "a284cdb9314b02c9de962e2adc3a22dfe70259c6637192e659530c00b64c0bb3",
   "_prebuilt/blobs/cuda_mma-v3.3-srca1ceadcb993c-sm_90a-cuda13_0.cubin.xz": "9dde8fd77891b1de549bc1d033a61c24ea28c5a61ae433c3d0ddf4df7bd81b27",
-  "_prebuilt/cuda_mma.py": "f91170e2619c29ec7c4edea7ec3f13f763fbddc7b55ce2faa054ea2c93f39700",
+  "_prebuilt/cuda_mma.py": "b82eaf06a1f1471ade61dbbbdc171a8344dc540ea0c1db0afa7b1eb0dd791f79",
   "_prebuilt/driver.py": "c444545fda3705cde897e79478cef1eb772add6697d5c5f3fb9e61d73dee0798",
   "_prebuilt/manifest.json": "00a1f8d5a25bceeb23c9422cdb02079c012ddafb13c5e8b5b530f0eca2da0509",
   "csrc/cuda_mma/triattn_v3.cu": "d5365b4d1bc472f8853deb51649810af959ab45b7baaa5e750cc4e7388a02720",
   "cuda_mma/__init__.py": "fad10acd7a4e4d4636c4dfbd7e9c3ba611c2b817173149f01ec9b0f6a3bd8635",
-  "face.py": "16a66a23e3e56c968e3c3feb77bc59bf4547776afbb6ac235cd6c1bb3de52267"
+  "face.py": "f12fa86019f6316500cce341885f0535bedd288b19a832ce4fc7b561c431c81d"
  },
  "prebuilt": [
   {

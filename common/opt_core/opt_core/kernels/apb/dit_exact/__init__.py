@@ -95,39 +95,46 @@ def load_prebuilt(key: Optional[str] = None):
     global _MOD
     if _MOD is not None:
         return _MOD
-    if not torch.cuda.is_available():
-        raise RuntimeError(f"{NAME}: no CUDA device")
-    cc = torch.cuda.get_device_capability()
+    from opt_core.gates import verify_prebuilt
+
+    verify = verify_prebuilt()
+    if verify:
+        if not torch.cuda.is_available():
+            raise RuntimeError(f"{NAME}: no CUDA device")
+        cc = torch.cuda.get_device_capability()
     pdir = prebuilt_dir(key)
     mpath = os.path.join(pdir, "manifest.json")
     if not os.path.isfile(mpath):
         raise RuntimeError(f"{NAME}: no prebuilt for stack {stack_key()} (expected {mpath})")
     man = json.load(open(mpath))
-    if f"sm{cc[0]}{cc[1]}" not in man.get("arch", []):
-        raise RuntimeError(f"{NAME}: device cc {cc} not in the prebuilt arch list {man.get('arch')}")
-    if man.get("torch") != torch.__version__ or man.get("cuda") != torch.version.cuda:
-        raise RuntimeError(f"{NAME}: prebuilt built for torch {man.get('torch')} / cuda {man.get('cuda')}, running torch {torch.__version__} / cuda {torch.version.cuda}")
     so = os.path.join(pdir, man["so"])
-    from opt_core.gates import binary_refusal  # noqa: PLC0415
-    why = binary_refusal(so)
-    if why:
-        raise RuntimeError(f"{NAME}: {man['so']} refused: {why}")
-    if _sha_file(so) != man["so_sha256"]:
-        raise RuntimeError(f"{NAME}: sha256 of {man['so']} does not match the manifest")
-    if source_sha256() != man["source_sha256"]:
-        raise RuntimeError(f"{NAME}: csrc/ sha256 does not match the manifest (the .so was built from different sources)")
+    if verify:
+        if f"sm{cc[0]}{cc[1]}" not in man.get("arch", []):
+            raise RuntimeError(f"{NAME}: device cc {cc} not in the prebuilt arch list {man.get('arch')}")
+        if man.get("torch") != torch.__version__ or man.get("cuda") != torch.version.cuda:
+            raise RuntimeError(f"{NAME}: prebuilt built for torch {man.get('torch')} / cuda {man.get('cuda')}, running torch {torch.__version__} / cuda {torch.version.cuda}")
+        from opt_core.gates import binary_refusal  # noqa: PLC0415
+        why = binary_refusal(so)
+        if why:
+            raise RuntimeError(f"{NAME}: {man['so']} refused: {why}")
+        if _sha_file(so) != man["so_sha256"]:
+            raise RuntimeError(f"{NAME}: sha256 of {man['so']} does not match the manifest")
+        if source_sha256() != man["source_sha256"]:
+            raise RuntimeError(f"{NAME}: csrc/ sha256 does not match the manifest (the .so was built from different sources)")
     loader = importlib.machinery.ExtensionFileLoader(man["module_name"], so)
     spec = importlib.util.spec_from_file_location(man["module_name"], so, loader=loader)
     mod = importlib.util.module_from_spec(spec); loader.exec_module(mod)
-    if str(getattr(mod, "version", "")) != str(man.get("kernel_version")):
-        raise RuntimeError(f"{NAME}: loaded module version {getattr(mod, 'version', None)} != manifest {man.get('kernel_version')}")
+    if verify:
+        if str(getattr(mod, "version", "")) != str(man.get("kernel_version")):
+            raise RuntimeError(f"{NAME}: loaded module version {getattr(mod, 'version', None)} != manifest {man.get('kernel_version')}")
     mod.init()
-    sc = run_loadcheck(mod, man)
-    STATS["loadcheck"] = sc
-    if not sc["bit_equal_vs_sdpa"]:
-        raise RuntimeError(f"{NAME}: load-time load-time check: output not bit-identical to torch SDPA in this process ({sc})")
-    if sc["digest_match"] is False:
-        raise RuntimeError(f"{NAME}: load-time load-time check: output digests differ from the manifest ({sc})")
+    if verify:
+        sc = run_loadcheck(mod, man)
+        STATS["loadcheck"] = sc
+        if not sc["bit_equal_vs_sdpa"]:
+            raise RuntimeError(f"{NAME}: load-time load-time check: output not bit-identical to torch SDPA in this process ({sc})")
+        if sc["digest_match"] is False:
+            raise RuntimeError(f"{NAME}: load-time load-time check: output digests differ from the manifest ({sc})")
     mod._dit_manifest = man
     _MOD = mod
     return mod

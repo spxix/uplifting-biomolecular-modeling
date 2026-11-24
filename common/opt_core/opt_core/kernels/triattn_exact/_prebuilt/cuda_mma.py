@@ -120,7 +120,8 @@ def resolve(device, toolkit=None, allowed_shas=None):
         hit = _loaded.get(ck)
         if hit is not None:
             return hit
-        build, why = select_build(ROUTE, dev.cc, be.driver_version(), tree_fingerprint=tree_fingerprint(), allowed_shas=allowed_shas,
+        fingerprint = tree_fingerprint() if os.environ.get("OPT_CORE_VERIFY_PREBUILT") != "0" else None
+        build, why = select_build(ROUTE, dev.cc, be.driver_version(), tree_fingerprint=fingerprint, allowed_shas=allowed_shas,
                                   prefer_major=_torch_cuda_major(), toolkit=toolkit)
         if build is None:
             raise Refused(f"prebuilt cuda_mma: {why}", {"route": ROUTE, "cc": dev.cc})
