@@ -51,10 +51,6 @@ def gate():
     """The kit's pre-import core pin gate (``_core_gate.gate``, the shared template's bytes) after :func:`place`: statement one of every
     entry route before any module of the core is imported; refuses by name with exit 3 (core_missing / core_mismatch / core_pin_unreadable),
     returns the pinned / installed facts on a match."""
-    if os.environ.get("OPT_CORE_VERIFY_PREBUILT") == "0":
-        import opt_core
-
-        return {"pinned": None, "installed": {"version": opt_core.__version__, "root": os.path.dirname(opt_core.__file__)}}
     from ._core_gate import gate as _gate
     return _gate(__file__, tag="protenix-opt")
 

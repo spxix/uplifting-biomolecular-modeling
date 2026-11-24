@@ -36,7 +36,7 @@ PINNED = {   # path under third_party/ -> (sha256, bytes) of the published bytes
     "blockfuse_addon/blockfuse/__init__.py": ("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", 0),
     "blockfuse_addon/blockfuse/biasln.py": ("a8f185e38769a6f105fdea2bc560ae02267686a022be3f1c9f3071d4dbe884a2", 4678),
     "blockfuse_addon/blockfuse_xl/__init__.py": ("5052a7c1ea26005052c9e440da08d944531f6051ec15028da9fca42f3e44bbc1", 10313),
-    "fastln_prebuilt.py": ("2874dcae92c4e63a4f65b344400d86516c47885176c88034a73fc24d384599db", 10148),  # Local prepared-artifact loading option; kernel bytes unchanged.
+    "fastln_prebuilt.py": ("a7ab026f6c7e1377ededa3b10dc04c17ce468f657f85799f8491f2fc9a2a669f", 10368),  # Local opt-out from runtime file hashing; kernel bytes unchanged.
     "fastln_prebuilt/fast_layer_norm_cuda_v2_stream.so": ("c295028752de1efc9a714d371f9ef8b467f60943ad3183bcee0afd925290a0a4", 3092032),
     "fastln_prebuilt/SHA256SUMS": ("da652fdee7dac631720bd7b2d2a25cd1e0dbd6da186ec960946bb55a65eb7be2", 100),                    # added beside the .so: its sha256sum line, re-hashed before the extension is loaded (protenix_opt.binary_sums)
     "fastln_prebuilt/manifest.json": ("4d13388d7ef0d9e2523d436f2b9db715887eab0dc442f799b430cb7746016f77", 1928),   # wording revised; digest re-pinned (text only, no code or binary change)
@@ -70,8 +70,8 @@ PINNED = {   # path under third_party/ -> (sha256, bytes) of the published bytes
     "protenix_fpf_msa/__init__.py": ("ef2950111a1ecb15524d74f1b6abbd96fd3b741593c918ad78a8ada16f34fe87", 584),   # digest of the current bytes: import lines re-pointed at the shared core, logic unchanged
     "protenix_fpf_msa/install.py": ("0c6b8e4e954d3b25c2034eddca22013619872bd40ce35927ee41f6b4cdc289a1", 11740),   # digest of the current bytes: import lines re-pointed at the shared core, logic unchanged
     "protenix_fpf_msa/loadcheck.py": ("cdbc81ef5e6a8bcbf88dbdaf89a410741fdbcdebbc52d8c155e0bfc2bf1c67bf", 3030),   # digest of the current bytes: import lines re-pointed at the shared core, logic unchanged
-    "protenix_fpf_triatt_procuda/__init__.py": ("1b0e2b223cbb8c5ca6f65545852f6a82064764816e9fc4038d9fa666c2f914a4", 11189),  # Local prepared-artifact loading option; kernel bytes unchanged.
-    "protenix_fpf_triatt_procuda/binding.py": ("2decdd421e91b2a2fc5202b1f7dc0e99a7eca7c43ade13ecddb820f2720c3b3f", 6694),  # Local prepared-artifact loading option; kernel bytes unchanged.
+    "protenix_fpf_triatt_procuda/__init__.py": ("c8359d782c043818f4d3630e9a63d6a11c1db31fe29251468b16afbe7ecf4faa", 10998),
+    "protenix_fpf_triatt_procuda/binding.py": ("1d651ed94d153b65666cf588301ef3c18d682f380d9b2469b97d946cd58494be", 6847),  # Local opt-out from runtime file hashing; kernel bytes unchanged.
     "protenix_fpf_triatt_procuda/build.py": ("89237a9ce479c5884db9f2f8b7522095fdd36ecfa890725d540338d3d8087229", 1831),
     "protenix_fpf_triatt_procuda/csrc/triatt_procuda_sm90.cu": ("fc120646461cd993a7d9fc94886a137c74873887da251fa538b1701f7880c1c1", 42281),
     "protenix_fpf_triatt_procuda/prebuilt/NOTICE.md": ("e2c6e3d0052be6c9fa0ce122fe721ae9a35aa432b918f8c08be57db8fd311517", 2120),   # NOTICE.md wording revised; digest re-pinned (text only, no code or binary change)

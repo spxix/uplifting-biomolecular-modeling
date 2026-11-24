@@ -21,8 +21,6 @@ SWITCH: PTX_TRIATT_PROCUDA=1 (set by the mode registry).  install() raises Refus
 import os, sys, json, atexit
 import torch
 
-from opt_core.gates import verify_prebuilt
-
 __version__ = "0.9.1"
 LEVER = "triatt_prologue_cuda"
 SWITCH = "PTX_TRIATT_PROCUDA"
@@ -115,8 +113,6 @@ def _make_prologue(orig, B, head_major, HMmod=None):
         res = B.launch(z, cch, bool(ending), out=out, head_major=head_major)
         _T["cuda"] += 1; _T["hm" if head_major else "rm"] += 1
         if out is not None: _T["pad"] += 1
-        if not verify_prebuilt():
-            return res
         NI, NJ = (int(z.shape[1]), int(z.shape[0])) if ending else (int(z.shape[0]), int(z.shape[1]))
         key = (NI, NJ, bool(ending), out is not None, bool(head_major), int(out["q"].shape[0]) if out is not None else 0)
         if key not in _STATE["shapes"]:
@@ -160,11 +156,7 @@ def install(verbose=True):
         B.load()
     except Exception as e:
         raise Refused(f"protenix_fpf_triatt_procuda: {e}")
-    if verify_prebuilt():
-        man = B.manifest()
-        _STATE["manifest"] = {k: man.get(k) for k in ("so_sha256", "src_sha256", "nvcc", "arch", "built_utc")}
-    else:
-        _STATE["manifest"] = {}
+    _STATE["manifest"] = {k: B.manifest().get(k) for k in ("so_sha256", "src_sha256", "nvcc", "arch", "built_utc")}
     _STATE["cells"] = dict(f1=dict(cells["f1"]["cfg"]), ln_arith=arith, fma_flags=list(fma), mkpf_class=str(cells.get("class", "")))
     import fpf_mkpf.kernels as MK
     if not getattr(MK.prologue_ln, "_procuda", None):

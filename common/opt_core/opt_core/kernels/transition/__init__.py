@@ -1559,16 +1559,13 @@ def _flash_ext():
     import importlib.machinery
     import importlib.util
     import torch
-    from opt_core.gates import verify_prebuilt
-
-    verify = verify_prebuilt()
     FT = carried_module("flash_sm90a")
     _PRIMED_ROWS.add("flash_sm90a")                                # the load (and its check) is attempted now: later calls do device work only or refuse by name
-    why_sealed = _sealed_prebuilt_refusal(FT) if verify else None
+    why_sealed = _sealed_prebuilt_refusal(FT)
     if why_sealed is None:
         try:
             return FT.load()
-        except (RuntimeError, ImportError, OSError) as e:
+        except RuntimeError as e:
             why_sealed = str(e).replace("flash_transition: ", "")
     key = flash_abi_key()
     if key in _FLASH_EXT:
@@ -1578,34 +1575,33 @@ def _flash_ext():
     if ent is None:
         raise RuntimeError("flash_transition: no prebuilt for %s (sealed loader: %s)" % (key, why_sealed))
     so = os.path.join(_HERE, FLASH_STORE, ent["so"])
-    if verify:
-        if not os.path.isfile(so):
-            raise RuntimeError("flash_transition: store binary missing for %s" % key)
-        from opt_core.gates import binary_refusal  # noqa: PLC0415
-        why = binary_refusal(so)
-        if why:
-            raise RuntimeError("flash_transition: store binary for %s refused: %s" % (key, why))
-        if ent.get("torch") != torch.__version__ or ent.get("cuda") != torch.version.cuda:
-            raise RuntimeError("flash_transition: store binary built for torch %s / CUDA %s, running %s / %s" % (ent.get("torch"), ent.get("cuda"), torch.__version__, torch.version.cuda))
-        if _sha256(so) != ent.get("so_sha256"):
-            raise RuntimeError("flash_transition: store binary digest differs from the store manifest (%s)" % key)
-        sealed = json.load(open(os.path.join(_HERE, "flash_sm90a", "prebuilt", FT.stack_key(), "manifest.json"), encoding="utf-8")) if os.path.isfile(
-            os.path.join(_HERE, "flash_sm90a", "prebuilt", FT.stack_key(), "manifest.json")) else {}
-        for fn, digest in (man.get("sources") or {}).items():
-            src = os.path.join(_HERE, "flash_sm90a", "csrc", fn)
-            if not os.path.isfile(src) or _sha256(src) != digest:
-                raise RuntimeError("flash_transition: store binary was built from a different csrc/%s than the sealed unit carries" % fn)
-            if sealed and (sealed.get("source_sha256") or {}).get(fn) not in (None, digest):
-                raise RuntimeError("flash_transition: store source digest of csrc/%s differs from the sealed manifest" % fn)
+    if not os.path.isfile(so):
+        raise RuntimeError("flash_transition: store binary missing for %s" % key)
+    from opt_core.gates import binary_refusal, verify_prebuilt  # noqa: PLC0415
+    verify_hashes = verify_prebuilt()
+    why = binary_refusal(so)
+    if why:
+        raise RuntimeError("flash_transition: store binary for %s refused: %s" % (key, why))
+    if ent.get("torch") != torch.__version__ or ent.get("cuda") != torch.version.cuda:
+        raise RuntimeError("flash_transition: store binary built for torch %s / CUDA %s, running %s / %s" % (ent.get("torch"), ent.get("cuda"), torch.__version__, torch.version.cuda))
+    if verify_hashes and _sha256(so) != ent.get("so_sha256"):
+        raise RuntimeError("flash_transition: store binary digest differs from the store manifest (%s)" % key)
+    sealed = json.load(open(os.path.join(_HERE, "flash_sm90a", "prebuilt", FT.stack_key(), "manifest.json"), encoding="utf-8")) if os.path.isfile(
+        os.path.join(_HERE, "flash_sm90a", "prebuilt", FT.stack_key(), "manifest.json")) else {}
+    for fn, digest in (man.get("sources") or {}).items():
+        src = os.path.join(_HERE, "flash_sm90a", "csrc", fn)
+        if not os.path.isfile(src) or (verify_hashes and _sha256(src) != digest):
+            raise RuntimeError("flash_transition: store binary was built from a different csrc/%s than the sealed unit carries" % fn)
+        if verify_hashes and sealed and (sealed.get("source_sha256") or {}).get(fn) not in (None, digest):
+            raise RuntimeError("flash_transition: store source digest of csrc/%s differs from the sealed manifest" % fn)
     name = man.get("module_name") or "flash_transition_sm90a"
     loader = importlib.machinery.ExtensionFileLoader(name, so)
     spec = importlib.util.spec_from_file_location(name, so, loader=loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
-    if verify:
-        for sym in ("flash_transition", "flash_transition_ln", "silu_table", "smem_bytes", "hidden_chunk"):
-            if not hasattr(mod, sym):
-                raise RuntimeError("flash_transition: store binary lacks symbol %s" % sym)
+    for sym in ("flash_transition", "flash_transition_ln", "silu_table", "smem_bytes", "hidden_chunk"):
+        if not hasattr(mod, sym):
+            raise RuntimeError("flash_transition: store binary lacks symbol %s" % sym)
     _FLASH_EXT[key] = mod
     return mod
 

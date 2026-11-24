@@ -200,12 +200,11 @@ def ensure_stream_ln() -> bool:
     except Exception as e:
         ST["why"] = f"protenix LN import: {e!r}"; return False
     pre = os.environ.get("INFOPT_FASTLN_PREBUILT", "")
-    verify = os.environ.get("OPT_CORE_VERIFY_PREBUILT") != "0"
     if pre:
         try:
             import fastln_prebuilt as FP
             from protenix_opt.binary_sums import manifest_binary_refusal      # the shipped .so is held to the SHA256SUMS beside it before it is mapped; refused by name -> the source rebuild below, as for an absent one
-            held = manifest_binary_refusal(pre) if verify else None
+            held = manifest_binary_refusal(pre)
             r = FP.install_prebuilt_fastln(pre, require_bitwise=True) if held is None else {"installed": False, "reason": f"{os.path.basename(pre.rstrip('/'))}: {held}"}
             if r.get("installed"):
                 _publish_ln_report(LN, r)
@@ -213,10 +212,6 @@ def ensure_stream_ln() -> bool:
             ST["why"] = f"prebuilt refused: {r.get('reason')}"[:300]
         except Exception as e:
             ST["why"] = f"prebuilt import/install: {e!r}"[:300]
-    if not verify:
-        if not pre:
-            ST["why"] = "INFOPT_FASTLN_PREBUILT is unset"
-        return False
     try:
         from infopt_graphs.protenix.fastln_stream import install_stream_correct_fastln
         try:                                   # print-only: say WHICH infopt_graphs copy serves fastln_stream

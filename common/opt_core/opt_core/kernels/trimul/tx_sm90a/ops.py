@@ -56,31 +56,27 @@ def load():
         tag = legacy_abi_tag(); ent = man["binaries"][tag]
     if ent is None:
         raise TrimulTxUnavailable("no prebuilt binary for ABI tag %s (have: %s)" % (tag, sorted(man.get("binaries", {}))))
-    from opt_core.gates import verify_prebuilt
-
-    verify = verify_prebuilt()
     so = os.path.join(HERE, "prebuilt", ent["file"])
-    got = ent.get("sha256", "")
-    if verify:
-        if not os.path.exists(so):
-            raise TrimulTxUnavailable("binary %s listed in the manifest is absent" % ent["file"])
-        from opt_core.gates import binary_refusal  # noqa: PLC0415
-        why = binary_refusal(so)
-        if why:
-            raise TrimulTxUnavailable("binary %s refused: %s" % (ent["file"], why))
-        got = _sha256(so)
-        if got != ent["sha256"]:
-            raise TrimulTxUnavailable("binary sha256 %s.. != manifest %s.. (%s)" % (got[:12], ent["sha256"][:12], ent["file"]))
-        for rel, want in man.get("sources", {}).items():                       # provenance: the shipped csrc is the source the binary was built from
-            p = os.path.join(HERE, rel)
-            if not os.path.exists(p) or _sha256(p) != want:
-                raise TrimulTxUnavailable("source %s does not match the manifest digest the binary was built from" % rel)
+    if not os.path.exists(so):
+        raise TrimulTxUnavailable("binary %s listed in the manifest is absent" % ent["file"])
+    from opt_core.gates import binary_refusal, verify_prebuilt
+
+    verify_hashes = verify_prebuilt()  # noqa: PLC0415
+    why = binary_refusal(so)
+    if why:
+        raise TrimulTxUnavailable("binary %s refused: %s" % (ent["file"], why))
+    got = _sha256(so) if verify_hashes else ent["sha256"]
+    if verify_hashes and got != ent["sha256"]:
+        raise TrimulTxUnavailable("binary sha256 %s.. != manifest %s.. (%s)" % (got[:12], ent["sha256"][:12], ent["file"]))
+    for rel, want in man.get("sources", {}).items():                       # provenance: the shipped csrc is the source the binary was built from
+        p = os.path.join(HERE, rel)
+        if not os.path.exists(p) or (verify_hashes and _sha256(p) != want):
+            raise TrimulTxUnavailable("source %s does not match the manifest digest the binary was built from" % rel)
     spec = importlib.util.spec_from_file_location(ent["module"], so)
     ext = importlib.util.module_from_spec(spec); spec.loader.exec_module(ext)
     _EXT = ext
     _STATE["loaded"] = {"tag": tag, "file": ent["file"], "sha256": got[:16], "toolchain": ent.get("toolchain")}
-    if verify:
-        _loadcheck(man)
+    _loadcheck(man)
     return _EXT
 
 

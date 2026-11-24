@@ -4,7 +4,6 @@ import ast
 import filecmp
 import json
 import os
-from types import SimpleNamespace
 
 import pytest
 
@@ -20,76 +19,6 @@ CORE_SHAPES = [("bf16", "dit_h16d48", 5), ("fp32", "dit_h16d48", 5), ("bf16", "d
                ("bf16", "msarow_h8d32", 128), ("fp32", "msarow_h8d32", 128), ("bf16", "atom_h4d32w32x128", 5), ("fp32", "atom_h4d32w32x128", 5)]
 PRODUCER_SHAPES = [("bf16", "bias_c128h16", 1), ("fp32", "bias_c128h16", 1), ("bf16", "bias_c128h4", 1), ("fp32", "bias_c64h4", 1), ("bf16", "bias_c256h16", 1), ("bf16", "bias_c384h16", 1)]
 MODULE_SHAPES = [("bf16", "mod_pf_c384cz128", 1), ("bf16", "mod_dit_c768cz128", 1)]
-
-
-def test_atom_exact_prepared_routes_replace_service_calibration(tmp_path, monkeypatch):
-    torch = pytest.importorskip("torch")
-    kernel = SimpleNamespace(
-        STATE={},
-        determine_routes=lambda device: pytest.fail("service calibrated routes"),
-        route_summary=lambda: "prepared",
-    )
-    monkeypatch.setattr(A, "carried_module", lambda name: kernel)
-    monkeypatch.setattr(A, "_ATOM_EXACT", dict(A._ATOM_EXACT, routes=None, refused=None))
-    monkeypatch.setenv("OPT_CORE_VERIFY_PREBUILT", "0")
-    monkeypatch.delenv("OPT_CORE_ATOM_ROUTES", raising=False)
-    monkeypatch.setenv("UNIFOLD_NATIVE_DIR", str(tmp_path))
-    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", True)
-    (tmp_path / "atom_routes.json").write_text(json.dumps({
-        "tf32": {"qk": {"256": "ffma"}, "pv": {"256": "tf32"}, "unreproducible": False},
-    }))
-    assert A.atom_exact_ready() is kernel
-    assert kernel.STATE == {"routes_qk": {256: "ffma"}, "routes_pv": {256: "tf32"}, "routes_done": True}
-
-
-def test_atom_exact_export_calibrates_and_restores_routes(tmp_path, monkeypatch):
-    torch = pytest.importorskip("torch")
-    kernel = SimpleNamespace(STATE={"routes_qk": {}, "routes_pv": {}, "routes_done": False})
-
-    def determine_routes(device):
-        assert device == "cpu"
-        route = "tf32" if torch.backends.cuda.matmul.allow_tf32 else "ffma"
-        kernel.STATE["routes_qk"][4] = route
-        kernel.STATE["routes_pv"][4] = route
-        return []
-
-    kernel.determine_routes = determine_routes
-    monkeypatch.setattr(A, "carried_module", lambda name: kernel)
-    precision = torch.get_float32_matmul_precision()
-    path = tmp_path / "routes.json"
-    A.export_atom_exact_routes(path, "cpu")
-    routes = json.loads(path.read_text())
-    assert routes["tf32"]["qk"] == {"4": "tf32"}
-    assert routes["ieee"]["pv"] == {"4": "ffma"}
-    assert torch.get_float32_matmul_precision() == precision
-    assert kernel.STATE == {"routes_qk": {}, "routes_pv": {}, "routes_done": False}
-
-
-def test_prepared_dit_extension_loads_without_synthetic_checks(tmp_path, monkeypatch):
-    from opt_core.kernels.apb import dit_exact
-
-    (tmp_path / "manifest.json").write_text(json.dumps({
-        "so": "prepared.so", "module_name": "prepared", "so_sha256": "build-digest",
-    }))
-    calls = []
-    kernel = SimpleNamespace(init=lambda: calls.append("initialize"))
-    loader = SimpleNamespace(exec_module=lambda module: calls.append("load"))
-    fake_importlib = SimpleNamespace(
-        machinery=SimpleNamespace(ExtensionFileLoader=lambda name, path: loader),
-        util=SimpleNamespace(
-            spec_from_file_location=lambda *args, **kwargs: object(),
-            module_from_spec=lambda spec: kernel,
-        ),
-    )
-    monkeypatch.setenv("OPT_CORE_VERIFY_PREBUILT", "0")
-    monkeypatch.setattr(dit_exact, "_MOD", None)
-    monkeypatch.setattr(dit_exact, "prebuilt_dir", lambda key: str(tmp_path))
-    monkeypatch.setattr(dit_exact, "importlib", fake_importlib)
-    monkeypatch.setattr(dit_exact, "run_loadcheck", lambda *args: pytest.fail("synthetic GPU check"))
-    monkeypatch.setattr(dit_exact, "_sha_file", lambda path: pytest.fail("binary hashing"))
-
-    assert dit_exact.load_prebuilt() is kernel
-    assert calls == ["load", "initialize"]
 
 
 def test_table_schema_rows_words():
@@ -431,6 +360,35 @@ def test_fpf_apb_cfg_is_key_merged_over_the_cell():
         with pytest.raises(ValueError) as ei:
             resolve_cfg({"BIAS_TMA": False, "BLOCK_K": 64}, D, opd, f32)
         assert "BLOCK_K" in str(ei.value)
+
+
+@pytest.mark.parametrize("updates, omitted, field", [
+    ({"source_sha256": {}}, None, "source_sha256"),
+    ({"source_sha256": []}, None, "source_sha256"),
+    ({}, "source_sha256", "source_sha256"),
+    ({}, "so_sha256", "so_sha256"),
+])
+def test_dit_exact_hash_opt_out_preserves_manifest_fields(tmp_path, monkeypatch, updates, omitted, field):
+    from opt_core.kernels.apb import dit_exact
+
+    monkeypatch.setenv("OPT_CORE_VERIFY_PREBUILT", "0")
+    monkeypatch.setattr(dit_exact, "_MOD", None)
+    monkeypatch.setattr(dit_exact.torch.cuda, "is_available", lambda: True)
+    monkeypatch.setattr(dit_exact.torch.cuda, "get_device_capability", lambda: (9, 0))
+    monkeypatch.setattr(dit_exact, "prebuilt_dir", lambda _: str(tmp_path))
+    monkeypatch.setattr(dit_exact, "_sha_file", lambda *_: pytest.fail("hashed the binary"))
+    monkeypatch.setattr(dit_exact, "source_sha256", lambda: pytest.fail("hashed the source tree"))
+    manifest = {
+        "arch": ["sm90"], "torch": dit_exact.torch.__version__, "cuda": dit_exact.torch.version.cuda,
+        "so": "kernel.so", "so_sha256": "build-digest", "source_sha256": {"dit_attn_exact.cu": "build-digest"},
+    }
+    manifest.update(updates)
+    manifest.pop(omitted, None)
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    (tmp_path / "kernel.so").touch()
+
+    with pytest.raises(RuntimeError, match=field):
+        dit_exact.load_prebuilt()
 
 
 def test_dit_exact_prebuilts_and_the_full_abi_word():

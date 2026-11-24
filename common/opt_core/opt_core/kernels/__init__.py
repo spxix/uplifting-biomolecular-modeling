@@ -18,7 +18,8 @@ kit routes it too — a ROUTE never changes what executes beyond the routed name
 importing it (an already-imported module answers with its own location), compares every file the core currently carries against the
 resolved location BY BYTES (a live read-and-compare, not a stored digest), and holds every required export in the environment (the
 variable set and, for a path, the file present) — the carried code reads them at import, so the check runs BEFORE the first import;
-a missing export, a neighbouring version, a missing or differing file: a named refusal. ``verify_carry(name)`` is the same byte
+a missing export, a neighbouring version, a missing or differing file: a named refusal. With file verification disabled,
+the import entry and any ``required_files`` declared for a neighbouring copy must still exist. ``verify_carry(name)`` is the same byte
 comparison without the Gate/exports wrapping, for a quick "is what would import here clean" check.
 
 A kit that keeps its OWN adapted fork of a carried kernel (a different calling convention, an engine-default policy specific to that
@@ -60,15 +61,14 @@ def _live_files(name: str, kind: str) -> List[str]:
 
 def _metadata(name: str) -> dict:
     path = os.path.join(META_DIR, name + ".json")
-    try:
-        with open(path, encoding="utf-8") as fh:
-            return json.load(fh)
-    except FileNotFoundError as exc:
-        raise KeyError(f"no carried kernel {name!r} (carried: {', '.join(names())})") from exc
+    if not os.path.isfile(path):
+        raise KeyError(f"no carried kernel {name!r} (carried: {', '.join(names())})")
+    with open(path, encoding="utf-8") as fh:
+        return json.load(fh)
 
 
 def sums(name: str) -> dict:
-    """The metadata of ``name``, including its live file list (relative paths)."""
+    """The metadata of ``name``, including its live file list."""
     doc = _metadata(name)
     doc["files"] = _live_files(name, doc["kind"])
     return doc
@@ -209,7 +209,7 @@ def exports_check(name: str, environ: Optional[Mapping[str, str]] = None) -> Lis
     """The required exports of ``name`` held in ``environ``: a list of problems (variable unset; a path export naming a missing file)."""
     environ = os.environ if environ is None else environ
     problems = []
-    for var, spec in sorted(sums(name).get("exports", {}).items()):
+    for var, spec in sorted(_metadata(name).get("exports", {}).items()):
         val = environ.get(var)
         if not val:
             if spec.get("required"):
@@ -221,22 +221,34 @@ def exports_check(name: str, environ: Optional[Mapping[str, str]] = None) -> Lis
 
 
 def route_check(name: str, path: Optional[List[str]] = None, environ: Optional[Mapping[str, str]] = None) -> Gate:
-    """Gate: ``import <name>`` resolves to bytes identical to the core's own copy (a live comparison, not a stored digest), and
-    every required export is in the environment and names an existing file. Run it BEFORE the first import of the kernel (the
+    """Gate: ``import <name>`` has its required files and, when file verification is enabled, matches the core copy byte for byte.
+    Every required export must be in the environment and name an existing file. Run it BEFORE the first import of the kernel (the
     carried code reads its exports at import). ``details`` carries the resolution of every ``runtime_imports`` name (None = not
     importable: the kernel's own fallback applies) — the kit records it."""
-    doc = sums(name)
+    from ..gates import verify_prebuilt
+
+    doc = _metadata(name)
     core = carried_path(name)
     where = resolve(name, path)
     details = {"kernel": name, "core_copy": core, "resolved": where, "routed": name in routed(), "already_imported": name in sys.modules,
                "runtime_imports": {n: resolve(n, path) for n in doc.get("runtime_imports", [])}}
     gate = f"kernel_route:{name}"
-    if where is None:
+    is_package = doc["kind"] == "package"
+    entry = os.path.join(where, "__init__.py") if where is not None and is_package else where
+    if entry is None or not os.path.isfile(entry):
         return Gate(name=gate, ok=False, details=details, reason=f"{name} not importable: kernels.route({name!r}) routes it to the core copy")
-    root = where if doc["kind"] == "package" else os.path.dirname(where)
-    h = _hold(root, name, doc["kind"])
+    root = where if is_package else os.path.dirname(where)
+    verify_hashes = verify_prebuilt()
+    if verify_hashes:
+        h = _hold(root, name, doc["kind"])
+    else:
+        required = doc.get("required_files", ()) if where != core else ()
+        h = {"missing": [rel for rel in required if not os.path.isfile(os.path.join(root, rel))], "differing": []}
     details.update(h)
     if h["differing"] or h["missing"]:
+        if not verify_hashes:
+            return Gate(name=gate, ok=False, details=details,
+                        reason=f"{name} resolves to {where} with missing files: {', '.join(h['missing'])}")
         return Gate(name=gate, ok=False, details=details,
                     reason=(f"{name} resolves to {where}, not the carried bytes ({doc['version']}): differing [{', '.join(h['differing'][:6]) or '-'}] "
                             f"missing [{', '.join(h['missing'][:6]) or '-'}] — a neighbouring version is never served silently"))

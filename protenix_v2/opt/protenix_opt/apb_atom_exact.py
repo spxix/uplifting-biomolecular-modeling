@@ -82,8 +82,7 @@ def install(model=None) -> Dict[str, Any]:
             raise LeverRefused(f"{NAME}: the provider refuses row atom_exact here ({e})") from e
         kernel = K
         routes = K.route_summary()
-        if os.environ.get("OPT_CORE_VERIFY_PREBUILT") != "0":
-            n_lc = len((json.load(open(os.path.join(os.path.dirname(os.path.abspath(K.__file__)), "vectors.json"))) or {}).get("cases", []))
+        n_lc = len((json.load(open(os.path.join(os.path.dirname(os.path.abspath(K.__file__)), "vectors.json"))) or {}).get("cases", []))
         fused = K.make_local_attention(orig)                      # the kernel's own envelope: misses take the original statement, counted in K.STATE
         K.STATE["calls"] = {"kernel": 0, "original": 0}; K.STATE["why_original"] = {}
 

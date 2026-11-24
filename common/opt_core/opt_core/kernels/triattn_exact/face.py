@@ -645,7 +645,6 @@ def triangle_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, bias: 
     q5, k5, v5, b5, m5, squeezed = _normalize(q, k, v, bias, mask)
     refusals = []
     out = None
-    verify = os.environ.get("OPT_CORE_VERIFY_PREBUILT") != "0"
     for route_name, cell in candidates:
         if kv_converted and not cell.get("when", {}).get("kv_lengths_via_mask", False):
             refusals.append(f"{cell.get('id')}: kv_lengths given but this cell carries no kv_lengths==prefix-mask evidence"); continue
@@ -653,11 +652,10 @@ def triangle_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, bias: 
         ok, reason = mod.supports(q, k, v, bias, mask, scale, m.lib_version, m.device_class)
         if not ok:
             refusals.append(f"route '{route_name}' refuses: {reason}"); continue
-        if verify:
-            try:
-                _selfcheck(route_name, m, q.device, q.dtype)      # a mismatch poisons the route for the process (logged loudly inside)
-            except Refused as e:                                    # self-check refused/failed: next proven route (still fail-closed, never the library)
-                refusals.append(f"route '{route_name}' self-check: {e.reason}"); continue
+        try:
+            _selfcheck(route_name, m, q.device, q.dtype)      # a mismatch poisons the route for the process (logged loudly inside)
+        except Refused as e:                                    # self-check refused/failed: next proven route (still fail-closed, never the library)
+            refusals.append(f"route '{route_name}' self-check: {e.reason}"); continue
         try:
             if route_name == "fallback":
                 out = mod.attention(q5, k5, v5, b5, mask=m5, scale=scale, lib_version=m.lib_version)

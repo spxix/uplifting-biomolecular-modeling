@@ -3,7 +3,7 @@
   "CELLS.json": "9e8ed8d08c691146d9d75becd0b25d2bec72aae266a645bb0a5d126e174f0359",
   "__init__.py": "4ef16e29f2e088bc8b81a8e74639d646e996a15a40053ba9d7d680aeba18aabb",
   "_paths.py": "a9a8ff3b4f578d08fa03bd1a436f8428ab38751df97c942467146cfc7cf89461",
-  "_prebuilt/__init__.py": "818dc89448b53a5ab449f412c83270c486e871e37a51575ec1afab9461a40be7",
+  "_prebuilt/__init__.py": "38b79f1caec280eefd2dd747e95a9ff8e5f391561e20f0d11401870d1b8982f6",
   "_prebuilt/blobs/cuda_mma-v3.3-srca1ceadcb993c-sm_80-cuda12_6.cubin.xz": "2b6252db1fa01fc468764bfe546390b3d93f155241e394e7390a9d278758bb58",
   "_prebuilt/blobs/cuda_mma-v3.3-srca1ceadcb993c-sm_80-cuda13_0.cubin.xz": "2493acd2126f77a2e2ff8af486859ec03aff173602b62a8a794cf65445c41de2",
   "_prebuilt/blobs/cuda_mma-v3.3-srca1ceadcb993c-sm_90-cuda12_6.cubin.xz": "730ca9f4fbb1653995fb227831dc57cfb2423bce5331447ae91dc5df7cba6456",
@@ -15,7 +15,7 @@
   "_prebuilt/manifest.json": "00a1f8d5a25bceeb23c9422cdb02079c012ddafb13c5e8b5b530f0eca2da0509",
   "csrc/cuda_mma/triattn_v3.cu": "d5365b4d1bc472f8853deb51649810af959ab45b7baaa5e750cc4e7388a02720",
   "cuda_mma/__init__.py": "fad10acd7a4e4d4636c4dfbd7e9c3ba611c2b817173149f01ec9b0f6a3bd8635",
-  "face.py": "f12fa86019f6316500cce341885f0535bedd288b19a832ce4fc7b561c431c81d"
+  "face.py": "f0cb37e1a5d2b701fd86b8227c317692b5153f842911ea5290fcaee38f736483"
  },
  "carried_digests_note": "sha256 of every checkpoint-derived file (the same values UPSTREAM.json records beside the checkpoint id); tests/test_triattn_exact_row.py holds the directory to both and each to the other",
  "exports": {},
