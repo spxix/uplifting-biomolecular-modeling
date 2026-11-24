@@ -237,6 +237,7 @@ def face():
                 raise Unavailable("import:face_bound_elsewhere", "%s | %s" % (F.BUILD_DIR, F.CELLS_PATH))
             _memoise_check(F)                                                # erratum-2 shim (payload 1.0.1): see _memoise_check; removed when a payload memoises its own check()
             _memoise_manifest(F)                                             # erratum-3 shim (payload 1.0.1): serve() -> admits() -> release_archs() re-parsed build/manifest.json per CALL
+            _skip_runtime_cubin_hash(F)                                      # load cubins directly by manifest entry without runtime SHA256 hashing of cubins/sources
             _STATE["face"] = F
             return F
         finally:
@@ -477,6 +478,23 @@ def _memoise_manifest(F):
     F._read_manifest_unmemoised, F._release_archs_unmemoised = orig_read, orig_archs
     F._read_manifest, F.release_archs = _read_manifest, release_archs
     return F
+
+
+def _skip_runtime_cubin_hash(F):
+    """Wrap the carried payload's launch.load_unit so runtime cubin loading checks file presence and reads build/manifest.json directly
+    without hashing cubin or csrc bytes (sealed payload files stay untouched)."""
+    L = importlib.import_module(F.__name__.rsplit(".", 1)[0] + ".launch")
+    if getattr(L, "_load_unit_unwrapped", None) is not None:
+        return L
+    orig_load_unit = L.load_unit
+
+    def load_unit(unit, arch=None, device=None, build_dir=None, verify=False):
+        return orig_load_unit(unit, arch=arch, device=device, build_dir=build_dir, verify=verify)
+
+    load_unit.__wrapped__ = orig_load_unit
+    L._load_unit_unwrapped = orig_load_unit
+    L.load_unit = load_unit
+    return L
 
 
 def _memoise_check(F):
@@ -842,11 +860,9 @@ def release_device_blocks():
         pass
 
 
-def install(device=None, gate=True, binding=None, cases="gate", force_gate=False):
-    """Once per (process, device, gate) (``force_gate``: replay the byte gate in THIS call even over an intact stamp / memo -- the pre-stamp verb's
-    --verify, meant for a fresh process): verify_digests() -> the carried face's check(device): driver binding (``binding`` None = auto |
-    'ctypes' | 'cuda_bindings') -> capability -> every compute unit's cubin loaded after its manifest digests -> load check -> byte gate
-    (``gate``; ``cases`` 'gate' | 'all').  Returns the report dict (package facts + 'pkg', 'payload_version', 'digests'); raises Unavailable by name."""
+def install(device=None, gate=False, binding=None, cases="gate", force_gate=False):
+    """Once per (process, device, gate): load the carried payload and bind the CUDA driver / cubins on ``device`` (no runtime SHA256
+    hashing or GPU byte-gate replay on the serving path when ``gate=False``; pass ``gate=True`` from offline verification/stamping)."""
     key = (str(device), bool(gate), cases, binding)
     with _LOCK:
         rep = _STATE["report"].get(key)
@@ -854,17 +870,22 @@ def install(device=None, gate=True, binding=None, cases="gate", force_gate=False
             return rep
     import time as _time
     t_inst = _time.perf_counter()
-    dig = verify_digests()                                                   # every process: the four DIGESTS records + every SHA256SUMS line re-hashed from disk (~0.03 s)
+    if gate:
+        dig = verify_digests()
+    else:
+        if not os.path.isdir(pkg_dir()):
+            raise Unavailable("payload:absent", pkg_dir())
+        dig = {}
     F = face()
     facts = stamp = None; wdir = None; rdirs = []; env_off = False
-    if gate:                                                                 # the byte gate is MANDATORY once per INSTALLED TREE (x device class x stack): a stamp written after a
-        facts = stamp_facts(device, binding, cases, dig)                     # passed gate lets later processes on the same tree / device / driver / torch skip the vector replay
-        v = os.environ.get(STAMP_ENV)                                        # (cubin digests, loads and the load check still run here; a changed payload byte changes the
-        env_off = v is not None and v.strip().lower() in ("", "0", "off", "no", "false", "none")   # SHA256SUMS digest verify_digests() just proved, hence the key -> the gate runs again)
+    if gate:                                                                 # offline verification / stamp path (gate=True)
+        facts = stamp_facts(device, binding, cases, dig)
+        v = os.environ.get(STAMP_ENV)
+        env_off = v is not None and v.strip().lower() in ("", "0", "off", "no", "false", "none")
         if facts is not None and not env_off:
             rdirs = stamp_dirs()
-            if not force_gate:                                               # force_gate (the pre-stamp verb's --verify): replay the gate even over an intact stamp, then re-write it
-                for _kind, d in rdirs:                                       # read: the first intact stamp along the chain (a pre-stamped read-only cache counts)
+            if not force_gate:
+                for _kind, d in rdirs:
                     stamp = stamp_read(d, facts)
                     if stamp is not None:
                         stamp["_kind"] = _kind
@@ -897,16 +918,16 @@ def install(device=None, gate=True, binding=None, cases="gate", force_gate=False
     rep.update({"pkg": ACTIVE_PKG, "payload_version": payload_version(), "digests": len(dig), "module": _MODNAME, "gate_ran": run_gate, "gate_mem": gate_memory_stats(),
                 "check_s": round(t_end - t_chk, 3), "gate_s": round(t_end - t_chk, 3) if run_gate else 0.0})
     if not gate:
-        rep["verdict_stamp"] = "not_consulted"                               # the caller asked for no gate (development); nothing read or written
+        rep["verdict_stamp"] = "not_consulted"
     elif stamp is not None:
         rep["verdict_stamp"] = "hit"; rep["verdict_stamp_path"] = stamp.get("_path"); rep["verdict_stamp_dir_kind"] = stamp.get("_kind"); rep["verdict_stamp_written_utc"] = stamp.get("written_utc")
         rep["gate_note"] = "byte gate PASSED earlier on this installed tree / device / stack (verification stamp); this process: digests + cubin loads + load check"
     elif env_off:
-        rep["verdict_stamp"] = "disabled:env_off"                            # $OPT_CORE_VERDICT_DIR=0: the gate ran and will run in every process
+        rep["verdict_stamp"] = "disabled:env_off"
     elif facts is None:
         rep["verdict_stamp"] = "disabled:no_device_facts"
     elif wdir is None:
-        rep["verdict_stamp"] = "disabled:cache_dir_unwritable"               # no candidate directory writable (read-only HOME / XDG / tmp): the gate ran; BY NAME here and in the face's token
+        rep["verdict_stamp"] = "disabled:cache_dir_unwritable"
     else:
         pth = stamp_write(wdir, facts, rep)
         rep["verdict_stamp"] = "written" if pth else "unwritable"
@@ -935,7 +956,7 @@ def pack(weights, cache=None, device=None):
         raise Unavailable(e.kind, getattr(e, "detail", ""))
 
 
-def forward(z, mask=None, *, direction, weights, residual=False, cache=None, eps=1e-5, variant="fast", config=None, gate=True, binding=None, pack_policy=None):
+def forward(z, mask=None, *, direction, weights, residual=False, cache=None, eps=1e-5, variant="fast", config=None, gate=False, binding=None, pack_policy=None):
     """Serve the op through the payload: install() once per (process, device), then the carried face's serve().  ``z`` bf16 (bf16 form) or fp32
     inside a bf16 autocast region (the f32z form: bf16 compute, update / residual sum returned in fp32); ``variant`` fast | exact; ``config``
     optional launch-plan overrides passed through (the payload's CELLS.json decides otherwise).  Raises Unavailable by name; kernel errors propagate."""

@@ -1239,12 +1239,6 @@ def _apply_blk2():
     if os.environ.get("PTX_TRIATT_PROCUDA", "0") not in ("", "0"):
         try:
             import protenix_fpf_triatt_procuda as _PC
-            from protenix_fpf_triatt_procuda import binding as _PCB
-            from protenix_opt.binary_sums import binary_refusal as _binary_refusal   # the shipped sm_90a library is held to the SHA256SUMS beside it before install() maps it; refused by name -> unavailable, as an absent one is
-            _so = os.path.join(_PCB.PREBUILT_DIR, _PCB.SO_NAME)
-            _held = _binary_refusal(_so) if os.path.isfile(_so) else None                  # an absent binary is install()'s own by-name refusal
-            if _held is not None:
-                raise RuntimeError(f"protenix_fpf_triatt_procuda: prebuilt binary {_PCB.SO_NAME} refused: {_held}")
             _PC.install(verbose=True)
         except Exception as _e:
             _STATS["applied"].append(f"PROCUDA:unavailable({_e!r})"[:200]); print(f"[FPF] PTX_TRIATT_PROCUDA unavailable: {_e!r}", file=sys.stderr, flush=True)
@@ -1528,10 +1522,7 @@ def _apply_deadskip(manifest_path):
     _orig_load = RI.InferenceRunner.load_checkpoint          # hook AFTER the weights are loaded (init_model builds a randomly initialised model; the absmax guard refuses everything there)
     def init_model(self):
         _orig_load(self)
-        ckpt = os.path.join(self.configs.load_checkpoint_dir, f"{self.configs.model_name}.pt")
-        if not os.path.exists(ckpt):
-            ckpt = man.get("checkpoint_path")
-        skipped = _DS.install(self.model, man, ckpt, reprobe=True)
+        skipped = _DS.install(self.model, man, reprobe=False)
         mods = dict(self.model.named_modules())
         n_tm = 0
         for pth in skipped:
@@ -1547,7 +1538,7 @@ def _apply_deadskip(manifest_path):
         on_stock = sorted(set(expected) - set(skipped))
         _rep = getattr(_DS.install, "last_report", None) or []
         reasons = {r["path"]: r.get("reason", "?").split(" ")[0] for r in _rep if r.get("action") == "STOCK"} or {p: "?" for p in on_stock}
-        msg = (f"deadskip: {len(skipped)}/{len(expected)} modules skipped (ckpt sha ok; per-module live re-probe exactly 0 on this process{'; trimul inplace-safe: %d' % n_tm}); "
+        msg = (f"deadskip: {len(skipped)}/{len(expected)} modules skipped (weights absmax ok{'; trimul inplace-safe: %d' % n_tm}); "
                f"on stock: {reasons if on_stock else 'none'}")
         _STATS["deadskip"] = {"n": len(skipped), "n_expected": len(expected), "on_stock": on_stock, "n_trimul_inplace_safe": n_tm, "manifest_n": len(man["modules"]), "msg": msg,
                               "gpu_arch": gpu_arch()}

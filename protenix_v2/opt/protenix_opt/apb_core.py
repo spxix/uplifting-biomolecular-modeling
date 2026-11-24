@@ -594,8 +594,8 @@ def apply() -> Optional[str]:
         served = f"dit_exact v{version or '?'} {abi} serves {len(kernel_classes)}/{len(probe)} DiT classes (S5 N256..2048 eager|graph) vouched on {stack}"
         floor = sorted({v for v in probe.values() if v != "dit_exact"})
         served += (f"; the rest keep the statement by name ({','.join(floor)})" if floor else "")
-        check = (f"loadcheck={lc.get('cases', 0)}cases{'-bit-equal' if lc.get('bit_equal', lc.get('ok', True)) else '-MISMATCH'} "
-                 f"digests={'match' if lc.get('digest_match') else 'n/a'}")
+        check = ((f"loadcheck={lc.get('cases', 0)}cases{'-bit-equal' if lc.get('bit_equal', lc.get('ok', True)) else '-MISMATCH'} "
+                  f"digests={'match' if lc.get('digest_match') else 'n/a'}") if lc else "loadcheck=none")
     else:
         served = f"exact word -> {','.join(sorted(set(probe.values())))} on {stack} (no class vouched for dit_exact here): every call keeps the statement BY NAME"
         check = "loadcheck=none(kernel not loaded)"

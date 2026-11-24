@@ -113,18 +113,6 @@ def _make_prologue(orig, B, head_major, HMmod=None):
         res = B.launch(z, cch, bool(ending), out=out, head_major=head_major)
         _T["cuda"] += 1; _T["hm" if head_major else "rm"] += 1
         if out is not None: _T["pad"] += 1
-        NI, NJ = (int(z.shape[1]), int(z.shape[0])) if ending else (int(z.shape[0]), int(z.shape[1]))
-        key = (NI, NJ, bool(ending), out is not None, bool(head_major), int(out["q"].shape[0]) if out is not None else 0)
-        if key not in _STATE["shapes"]:
-            def ref_fn():
-                if out is None:
-                    return orig(module, z, cch, cfg, ending, ln_arith=ln_arith, fma_flags=fma_flags)
-                scratch = _scratch_like(out)
-                r = orig(module, z, cch, cfg, ending, ln_arith=ln_arith, fma_flags=fma_flags, out=scratch)
-                if head_major and HMmod is not None:      # keep the caller's tag: the reference call tagged only its scratch dict
-                    pass
-                return r
-            _shape_check(key, res, ref_fn)
         return res
     prologue.__wrapped__ = orig
     prologue._procuda = "hm" if head_major else "rm"

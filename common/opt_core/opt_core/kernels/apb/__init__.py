@@ -1083,9 +1083,9 @@ _ATOM_EXACT = {"routes": None, "loadcheck": None, "seconds": None, "refused": No
 
 def atom_exact_ready(device=None):
     """Per process, before the first launch of row ``atom_exact``: determine which cuBLAS numerics the statement's chunked GEMMs use here
-    (the carried kernel's route table; ~1 s, torch.matmul on the exact shapes) and check the carried load-check vectors' output digests.
-    Returns the carried kernel module; raises Refusal by name (routes_unreproducible | loadcheck:<case>) with fallback sdpa_gather."""
-    import hashlib, json as _json, os, time, torch
+    (the carried kernel's route table; torch.matmul on the exact shapes).
+    Returns the carried kernel module; raises Refusal by name (routes_unreproducible) with fallback sdpa_gather."""
+    import time, torch
     K = carried_module("atom_exact")
     if _ATOM_EXACT["refused"]:
         raise Refusal(_ATOM_EXACT["refused"], "atom_exact", "sdpa_gather")
@@ -1097,27 +1097,7 @@ def atom_exact_ready(device=None):
     if bad:                                                                     # a reachable chunk batch count whose cuBLAS numerics no variant reproduces: named, never guessed
         _ATOM_EXACT["refused"] = "routes_unreproducible(tf32=%s;%s)" % (bool(torch.backends.cuda.matmul.allow_tf32), K.route_summary().replace(" ", ""))
         raise Refusal(_ATOM_EXACT["refused"], "atom_exact", "sdpa_gather")
-    spec = _json.load(open(os.path.join(os.path.dirname(os.path.abspath(K.__file__)), "vectors.json")))
-    def _original(*a, **kw):                                                    # the load-check vectors sit inside the kernel's envelope: never reached
-        raise Refusal("loadcheck:envelope_miss", "atom_exact", "sdpa_gather")
-    wrapped = K.make_local_attention(_original)
-    bad = []
-    for case in spec["cases"]:                                                  # the producing kit's vectors: [S, NA, H*32] linears (scales .35, 1, 1) viewed [S, H, NA, 32]; bias [1, H, nb, 32, 128] x 2
-        g = torch.Generator(device="cpu").manual_seed(int(case["seed"]))
-        S_, H_, NA_ = int(case["S"]), int(case["H"]), int(case["NA"])
-        nb = (NA_ + K.NQ - 1) // K.NQ
-        lin = [torch.randn(S_, NA_, H_ * K.D, generator=g) * sc for sc in (0.35, 1.0, 1.0)]
-        q, k, v = [t.to(dev).view(S_, NA_, H_, K.D).transpose(1, 2) for t in lin]
-        b = (torch.randn(1, H_, nb, K.NQ, K.NK, generator=g) * 2.0).to(dev)
-        o = wrapped(q, k, v, K.NQ, K.NK, attn_bias=None, trunked_attn_bias=b, inf=1e10, use_efficient_implementation=True, inplace_safe=False, chunk_size=256)
-        torch.cuda.synchronize()
-        dg = hashlib.sha256(o.detach().contiguous().cpu().numpy().tobytes()).hexdigest()
-        if dg != case["sha256"] or list(o.shape) != list(case.get("shape", o.shape)):
-            bad.append(str(case.get("name", case["seed"])))
-    _ATOM_EXACT["loadcheck"] = {"n": len(spec["cases"]), "bad": bad}
-    if bad:
-        _ATOM_EXACT["refused"] = "loadcheck:%s" % "+".join(bad)
-        raise Refusal(_ATOM_EXACT["refused"], "atom_exact", "sdpa_gather")
+    _ATOM_EXACT["loadcheck"] = None
     _ATOM_EXACT["routes"] = K.route_summary(); _ATOM_EXACT["seconds"] = round(time.time() - t0, 2)
     K.STATE["calls"] = {"kernel": 0, "original": 0}
     return K

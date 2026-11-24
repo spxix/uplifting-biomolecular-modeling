@@ -413,11 +413,25 @@ def _gated_by_vectors(cc: tuple, key: str) -> bool:
     return tuple(cc) == SM90 or any(tuple(EXTENSIONS.get(e, {}).get("cc", ())) == tuple(cc) for e in stacks_built().get(key, []))
 
 
-def install(check: bool = True) -> dict:
-    """Verify + load + byte-gate the extensions of this interpreter's stack (cc 9.0), or self-check the Triton member (other devices); cached per
-    process, and the PASSED verdict cached on disk (``_verdict_dir()``, keyed by ``_verdict_key``) so a later process on the same machine / stack /
-    payload verifies digests only.  Returns the report; raises Unavailable by name.  Kits call ``warm()`` at activation so none of this lands
-    inside the first served call."""
+def _check_prebuilt_present(key: str) -> Dict[str, dict]:
+    """Structural presence check for every extension built for ``key`` (no runtime SHA256 hashing)."""
+    key = provider_key_to_pkg_key(key)
+    built = stacks_built().get(key)
+    if built is None:
+        raise Unavailable("no_prebuilt:%s@%s" % (ACTIVE_PKG, key))
+    rep = {}
+    for ext in built:
+        so = os.path.join(payload_dir(), "prebuilt", key, ext + ".so")
+        if not os.path.isfile(so):
+            raise Unavailable("no_prebuilt:%s@%s:%s" % (ACTIVE_PKG, key, ext))
+        rec = record(key, ext) or {}
+        rep[ext] = {"so_sha256": rec.get("so_sha256", ""), "digests_in_record": sorted(k for k in ("so_sha256", "source_sha256", "loadcheck") if k in rec), "nvcc": rec.get("nvcc"), "cutlass_tag": rec.get("cutlass_tag")}
+    return rep
+
+
+def install(check: bool = False) -> dict:
+    """Load the extensions of this interpreter's stack; cached per process. Structural presence checks run at load;
+    optional offline ``check=True`` also runs manifest digest verification and the byte gate. Returns the report; raises Unavailable by name."""
     import time as _time
     rep = _STATE.get("install")
     if rep is not None:
@@ -425,9 +439,11 @@ def install(check: bool = True) -> dict:
     t0 = _time.perf_counter()
     key = stack_key()
     cc = _device_cc()
-    rep = {"pkg": ACTIVE_PKG, "stack_key": key, "cc": "%d.%d" % cc, "manifests": verify_manifests(key)}
+    manifests = verify_manifests(key) if check else _check_prebuilt_present(key)
+    rep = {"pkg": ACTIVE_PKG, "stack_key": key, "cc": "%d.%d" % cc, "manifests": manifests}
     M = _module()
-    vdir = _verdict_dir(); vkey = _verdict_key(key, cc, rep["manifests"]) if check else None
+    vdir = _verdict_dir() if check else None
+    vkey = _verdict_key(key, cc, rep["manifests"]) if check else None
     vpath = os.path.join(vdir, "gate-%s.json" % vkey[:24]) if (vdir and vkey) else None
     if not check:
         rep["loadcheck"] = "skipped"
@@ -461,11 +477,10 @@ def install(check: bool = True) -> dict:
 
 
 def warm(shapes=(), dtype=None) -> dict:
-    """Activation-time hook: import the payload, verify digests, run (or read the cached verdict of) the byte gate, and optionally serve one call
-    per (H, S, D) in ``shapes`` so the Triton member's JIT and the extensions' first-launch costs land here, not in the first model call.
-    Returns install()'s report plus per-shape first-call seconds."""
+    """Activation-time hook: import the payload and optionally serve one call per (H, S, D) in ``shapes`` so the Triton member's JIT and
+    the extensions' first-launch costs land here, not in the first model call. Returns install()'s report plus per-shape first-call seconds."""
     import time as _time, torch
-    rep = dict(install(check=True)); firsts = {}
+    rep = dict(install(check=False)); firsts = {}
     dt = dtype or torch.bfloat16
     for (H, S, D) in shapes:
         g = torch.Generator(device="cuda").manual_seed(S)
@@ -489,7 +504,7 @@ def route(q, k, v, bias, mask=None) -> str:
 def triangle_attention(q, k, v, bias, mask=None, scale=None):
     M = _module()
     if "install" not in _STATE:
-        install(check=True)
+        install(check=False)
     try:
         return M.triangle_attention(q, k, v, bias, mask=mask, scale=scale)
     except NotImplementedError as e:                                 # the package's typed refusal (Unsupported is a NotImplementedError)

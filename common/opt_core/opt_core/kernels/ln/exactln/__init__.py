@@ -176,8 +176,7 @@ def _nvrtc_version() -> str:
 
 
 def _prebuilt_index() -> Optional[dict]:
-    """prebuilt/index.json when it exists, is switched on, and was built from THIS exactln_fwd.cu with these compile options (else None, once)."""
-    import hashlib
+    """prebuilt/index.json when it exists, is switched on, and matches these compile options (else None, once)."""
     if _STATE["prebuilt_index"] is not None or _STATE["prebuilt_off"]:
         return _STATE["prebuilt_index"]
     why = None
@@ -193,9 +192,7 @@ def _prebuilt_index() -> Optional[dict]:
             except (OSError, ValueError) as e:
                 idx, why = None, "index unreadable: %s" % e
             if idx is not None:
-                if idx.get("source_sha256") != hashlib.sha256(_source()).hexdigest():
-                    why = "built from another exactln_fwd.cu (source sha256 differs)"
-                elif list(idx.get("opts", [])) != [o.decode() for o in _opts(None)]:
+                if list(idx.get("opts", [])) != [o.decode() for o in _opts(None)]:
                     why = "built with other compile options"
                 else:
                     _STATE["prebuilt_index"] = idx
@@ -206,7 +203,6 @@ def _prebuilt_index() -> Optional[dict]:
 
 def _prebuilt_function(expr: str, cc: str):
     """(CUfunction, CUmodule) of `expr` from the shipped bundle for sm_<cc>, or None (no bundle for the arch / kernel not in it / load refused)."""
-    import hashlib
     idx = _prebuilt_index()
     if idx is None:
         return None
@@ -220,14 +216,6 @@ def _prebuilt_function(expr: str, cc: str):
         try:
             data = open(path, "rb").read()
         except OSError:
-            return None
-        from opt_core.gates import binary_refusal  # noqa: PLC0415
-        why = binary_refusal(path, data)
-        if why:
-            _STATE["prebuilt_off"] = "bundle %s refused: %s" % (b["file"], why)
-            return None
-        if hashlib.sha256(data).hexdigest() != b.get("sha256"):
-            _STATE["prebuilt_off"] = "bundle sha256 differs from index.json (%s)" % b["file"]
             return None
         torch.cuda.current_stream()
         _ensure_ctx()

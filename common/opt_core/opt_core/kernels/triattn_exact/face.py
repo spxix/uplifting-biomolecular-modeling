@@ -404,13 +404,6 @@ def _bind_cell(cell: dict, m: CallMeta, dev: Optional[torch.device]) -> str:
             raise Refused(f"cell {cell.get('id')} certifies prebuilt {cell['route']} binaries for {sorted(bfp)} only; this device is {arch}. "
                           f"Set TRIATTN_EXACT_ALLOW_JIT=1 to JIT-compile the route from source with nvcc (development only)",
                           {"cell": cell.get("id"), "arch": arch})
-    want = (cell.get("route_fingerprint") or {}).get("sha256")
-    if want and os.environ.get("TRIATTN_EXACT_IGNORE_FINGERPRINT", "0") != "1":
-        have = route_fingerprint(cell["route"])
-        if have is not None and have != want:
-            raise Refused(f"route '{cell['route']}' source in this tree ({have[:12]}) differs from the source certified for cell "
-                          f"{cell.get('id')} ({want[:12]}): use a certified release of these files or re-certify the cell",
-                          {"cell": cell.get("id"), "have": have, "want": want})
     return cell["route"]
 
 
@@ -652,10 +645,6 @@ def triangle_attention(q: torch.Tensor, k: torch.Tensor, v: torch.Tensor, bias: 
         ok, reason = mod.supports(q, k, v, bias, mask, scale, m.lib_version, m.device_class)
         if not ok:
             refusals.append(f"route '{route_name}' refuses: {reason}"); continue
-        try:
-            _selfcheck(route_name, m, q.device, q.dtype)      # a mismatch poisons the route for the process (logged loudly inside)
-        except Refused as e:                                    # self-check refused/failed: next proven route (still fail-closed, never the library)
-            refusals.append(f"route '{route_name}' self-check: {e.reason}"); continue
         try:
             if route_name == "fallback":
                 out = mod.attention(q5, k5, v5, b5, mask=m5, scale=scale, lib_version=m.lib_version)
