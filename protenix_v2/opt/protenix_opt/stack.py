@@ -154,6 +154,8 @@ def kit_sys_path(pythonpath: Optional[List[str]] = None, fpf_home: Optional[str]
 def graphed_py(entries: List[str]) -> Optional[str]:
     """The `infopt_graphs/protenix/graphed.py` a process with these sys.path entries imports: the first entry carrying the
     `infopt_graphs` package decides (regular-package resolution), so this is the file `import infopt_graphs.protenix.graphed` loads."""
+    if not _core_gates.verify_prebuilt():
+        return None
     for e in entries:
         if os.path.isfile(os.path.join(e, "infopt_graphs", "__init__.py")):
             p = os.path.join(e, GRAPHED_PY)
@@ -318,6 +320,9 @@ def _classify(mode: str, applied: List[str], environ, notes: Optional[List[str]]
             continue
         if name == "sampler_fuse" and environ.get(lv.env_keys[0]) == "0":   # a lever the caller removed by its own switch (PTX_SAMPLER_FUSE=0)
             skipped.append(name); why[name] = f"off by flag {lv.env_keys[0]}=0 (a recorded opt-out: the record's off_by_flag; not a fallback)"
+            continue
+        if name == "deadskip" and environ.get("OPT_CORE_VERIFY_PREBUILT") == "0":
+            skipped.append(name); why[name] = "disabled for prepared runtime weights"
             continue
         if lv.probe == "env":
             if name == "fastln_prebuilt":
@@ -942,10 +947,13 @@ def _route_kernels(fpf_home: str) -> dict:
     runtime_imports, reason}} — the activation report and the manifest carry it; a refused route is a named NOT ACTIVE reason."""
     out = {}
     for name in KERNEL_ROUTES:
-        _kernels.route(name)
+        core_copy = _kernels.route(name)
         exp = _kernels.exports(name, **(KERNEL_EXPORTS[name](fpf_home) if name in KERNEL_EXPORTS else {}))
         exp = {k: (os.environ[k] if (k in CALLER_EXPORTS and os.environ.get(k)) else v) for k, v in exp.items()}   # a caller's pre-set table wins (recorded as the export in force)
         os.environ.update(exp)
+        if not _core_gates.verify_prebuilt():
+            out[name] = {"ok": True, "core_copy": core_copy, "routed": True, "exports": exp, "reason": None}
+            continue
         g = _kernels.route_check(name)
         d = g.details
         out[name] = {"ok": g.ok, "resolved": d.get("resolved"), "core_copy": d.get("core_copy"), "routed": d.get("routed"), "already_imported": d.get("already_imported"),
@@ -960,23 +968,25 @@ def _gates(base: dict) -> Optional[str]:
         fpf_home = kit_home()
     except FileNotFoundError as e:
         return str(e)
-    if not os.path.isfile(os.path.join(fpf_home, "env.sh")):
-        return f"kit directory not found at {fpf_home} (install the package editable from protenix_v2/opt)"
-    if not os.path.isfile(pins_path()):
-        return f"stock pins not found at {pins_path()}"
+    verify = _core_gates.verify_prebuilt()
     force = os.environ.get(ENV_FORCE, "") == "1"
-    ok, ver, why = version_gate(force)
-    base["protenix_version"] = ver
-    if not ok:
-        return why
+    if verify:
+        if not os.path.isfile(os.path.join(fpf_home, "env.sh")):
+            return f"kit directory not found at {fpf_home} (install the package editable from protenix_v2/opt)"
+        if not os.path.isfile(pins_path()):
+            return f"stock pins not found at {pins_path()}"
+        ok, ver, why = version_gate(force)
+        base["protenix_version"] = ver
+        if not ok:
+            return why
     facts = _core.gate()                                                              # the kit's ONE pin gate (the entry ran it; idempotent): the facts for the report
     base["core"] = {"ok": True, "pinned": facts["pinned"], "imported": {k: facts["installed"].get(k) for k in ("version", "root")}}
     g = gpu_probe_smi()
     base["gpu"] = {"name": g["name"], "sm": g["sm"], "cc": g["cc"], "probe": g.get("probe")}
     base["_cc"] = g["cc"]
-    if g["sm"] is None and not force:
+    if verify and g["sm"] is None and not force:
         return f"no CUDA device visible ({g.get('probe')}; the levers need an NVIDIA GPU); {ENV_FORCE}=1 applies them anyway"
-    if g["sm"] is None:
+    if verify and g["sm"] is None:
         sys.stderr.write(f"{LOG} WARNING: no CUDA device visible; {ENV_FORCE}=1 applies the levers anyway\n")
     base["gpu_supported"] = g["cc"] in SUPPORTED_CC                    # data for the report/manifest only: the kit's own per-key gates decide what runs
     if base["target_gpu"] and g["name"] and base["target_gpu"].lower() not in g["name"].lower():

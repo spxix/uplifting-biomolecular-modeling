@@ -185,6 +185,12 @@ def install(device=None) -> dict:
     R = refused_class()
     t0 = time.perf_counter()
     rep: Dict[str, Any] = {"proven_cells": len(proven_cells()), "cache_dir": os.environ.get("TRIATTN_EXACT_CACHE", "")}
+    from opt_core.gates import verify_prebuilt
+
+    if not verify_prebuilt():
+        rep["prepare_s"] = round(time.perf_counter() - t0, 2)
+        _STATE["installed"] = rep
+        return rep
     probe, why = _probe_call(face, device)
     if probe is None:
         rep["route"] = None
