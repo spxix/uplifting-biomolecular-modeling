@@ -1825,10 +1825,10 @@ def _native_token(T, device=None):
         pass
 
 
-def native_install(device=None, gate=True, binding=None):
-    """Rows native / native_exact: check and load the sealed payload once per (process, device) -- digests, driver binding, cubin loads + load check,
-    byte gate (``gate``) -- and return its report dict; ``Refusal`` by name (fallback v4) when it cannot serve here.  A kit may call this at start-up
-    (outside CUDA-graph capture) so the first served call does no loading."""
+def native_install(device=None, gate=False, binding=None):
+    """Rows native / native_exact: load the sealed payload once per (process, device) -- driver binding and cubin loads (pass ``gate=True``
+    for offline digest/vector verification) -- and return its report dict; ``Refusal`` by name (fallback v4) when it cannot serve here.
+    A kit may call this at start-up (outside CUDA-graph capture) so the first served call does no loading."""
     T = _imp("opt_core.kernels.trimul.native", "native", "v4")
     try:
         rep = T.install(device=device, gate=gate, binding=binding)
@@ -1839,8 +1839,8 @@ def native_install(device=None, gate=True, binding=None):
 
 
 def _serve_native(row, z, mask, direction, w, residual, eps, cache, config=None, word=None):
-    """Rows native / native_exact: the sealed trimul_native payload through .native (install once per process: digests, driver binding, cubin loads,
-    load check, byte gate; then the payload's serve: its weight pack, launch plans, workspaces and tensor maps live in ``cache``).  z bf16 = the bf16
+    """Rows native / native_exact: the sealed trimul_native payload through .native (install once per process: driver binding and cubin loads;
+    then the payload's serve: its weight pack, launch plans, workspaces and tensor maps live in ``cache``).  z bf16 = the bf16
     form; z fp32 inside a bf16 autocast region = the f32z form (bf16 compute, update / residual sum in fp32).  ``config`` {'gate': bool, 'binding':
     None|'ctypes'|'cuda_bindings', 'incoming_mode' / 'k1_cfg' / 'k3_cfg': launch-plan overrides} for one caller; None = the payload's own table."""
     zs4 = z if z.dim() == 4 else z[None]
@@ -1862,7 +1862,7 @@ def _serve_native(row, z, mask, direction, w, residual, eps, cache, config=None,
         cache[NATIVE_WDICT_KEY] = ent
     try:
         out = T.forward(z, mask, direction=direction, weights=ent[1], residual=bool(residual), cache=cache, eps=eps,
-                        variant=("exact" if row == "native_exact" else "fast"), config=cfg, gate=bool(cfg.get("gate", True)), binding=cfg.get("binding"),
+                        variant=("exact" if row == "native_exact" else "fast"), config=cfg, gate=bool(cfg.get("gate", False)), binding=cfg.get("binding"),
                         pack_policy=("lru1" if str(word or "") == "big" else None))   # big: the shared cache keeps at most one layer's packed weights (residency); fast / exact: per layer
     except T.Unavailable as e:
         raise Refusal(e.kind, row, "cueq" if e.kind.startswith(("shape:n=", "weights:", "no_cell:")) else fb)

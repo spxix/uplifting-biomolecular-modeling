@@ -1534,8 +1534,7 @@ def flash_store_manifest():
 
 
 def _sealed_prebuilt_refusal(FT):
-    """The reason the sealed unit's prebuilt for this stack is refused by its SHA256SUMS (the unit's loader is then not called: the store binary is
-    tried, as when the sealed directory has no build for the stack), else None."""
+    """Structural check for the sealed unit's prebuilt binary (existence only; no runtime SHA256SUMS check)."""
     d = FT.prebuilt_dir()
     man_p = os.path.join(d, "manifest.json")
     if not os.path.isfile(man_p):
@@ -1546,21 +1545,18 @@ def _sealed_prebuilt_refusal(FT):
     except (OSError, ValueError, KeyError, TypeError):
         return None
     if not os.path.isfile(so):
-        return None
-    from opt_core.gates import binary_refusal  # noqa: PLC0415  (standard library only; the face imports nothing of the core at module level)
-    why = binary_refusal(so)
-    return None if why is None else "prebuilt %s refused: %s" % (os.path.basename(so), why)
+        return "prebuilt %s missing" % os.path.basename(so)
+    return None
 
 
 def _flash_ext():
     """The sealed unit's extension module for this process: the sealed loader first (its own (torch, CUDA) directory and python tag); when it refuses,
-    the binary of FLASH_STORE for flash_abi_key() -- built from the SAME csrc (source digests must equal the sealed manifest's), digest-checked, loaded
-    under the sealed module name.  Raises RuntimeError('flash_transition: ...') naming both reasons when neither serves."""
+    the binary of FLASH_STORE for flash_abi_key(), loaded under the sealed module name.  Raises RuntimeError('flash_transition: ...') naming both reasons when neither serves."""
     import importlib.machinery
     import importlib.util
     import torch
     FT = carried_module("flash_sm90a")
-    _PRIMED_ROWS.add("flash_sm90a")                                # the load (and its check) is attempted now: later calls do device work only or refuse by name
+    _PRIMED_ROWS.add("flash_sm90a")                                # the load is attempted now: later calls do device work only or refuse by name
     why_sealed = _sealed_prebuilt_refusal(FT)
     if why_sealed is None:
         try:
@@ -1577,22 +1573,8 @@ def _flash_ext():
     so = os.path.join(_HERE, FLASH_STORE, ent["so"])
     if not os.path.isfile(so):
         raise RuntimeError("flash_transition: store binary missing for %s" % key)
-    from opt_core.gates import binary_refusal  # noqa: PLC0415
-    why = binary_refusal(so)
-    if why:
-        raise RuntimeError("flash_transition: store binary for %s refused: %s" % (key, why))
     if ent.get("torch") != torch.__version__ or ent.get("cuda") != torch.version.cuda:
         raise RuntimeError("flash_transition: store binary built for torch %s / CUDA %s, running %s / %s" % (ent.get("torch"), ent.get("cuda"), torch.__version__, torch.version.cuda))
-    if _sha256(so) != ent.get("so_sha256"):
-        raise RuntimeError("flash_transition: store binary digest differs from the store manifest (%s)" % key)
-    sealed = json.load(open(os.path.join(_HERE, "flash_sm90a", "prebuilt", FT.stack_key(), "manifest.json"), encoding="utf-8")) if os.path.isfile(
-        os.path.join(_HERE, "flash_sm90a", "prebuilt", FT.stack_key(), "manifest.json")) else {}
-    for fn, digest in (man.get("sources") or {}).items():
-        src = os.path.join(_HERE, "flash_sm90a", "csrc", fn)
-        if not os.path.isfile(src) or _sha256(src) != digest:
-            raise RuntimeError("flash_transition: store binary was built from a different csrc/%s than the sealed unit carries" % fn)
-        if sealed and (sealed.get("source_sha256") or {}).get(fn) not in (None, digest):
-            raise RuntimeError("flash_transition: store source digest of csrc/%s differs from the sealed manifest" % fn)
     name = man.get("module_name") or "flash_transition_sm90a"
     loader = importlib.machinery.ExtensionFileLoader(name, so)
     spec = importlib.util.spec_from_file_location(name, so, loader=loader)

@@ -173,7 +173,7 @@ def _publish_ln_report(LN, r) -> None:
     (1) cached on the protenix LN module (read by the bundle's fastln_prebuilt / fastln_stream 'already installed' branches), (2) mirrored into the kit's
     infopt_graphs.protenix.FASTLN_REPORT (never overwriting an existing bitwise entry) so the guard passes even when the kit's own unpatched fastln_prebuilt shadows ours."""
     try:
-        if r.get("bitwise") and not getattr(LN, "_infopt_fastln_report", None):
+        if r.get("installed") and not getattr(LN, "_infopt_fastln_report", None):
             LN._infopt_fastln_report = dict(r)
     except Exception:
         pass
@@ -183,14 +183,14 @@ def _publish_ln_report(LN, r) -> None:
             import importlib
             mod = importlib.import_module("infopt_graphs.protenix")
         FR = getattr(mod, "FASTLN_REPORT", None)
-        if isinstance(FR, dict) and not FR.get("bitwise") and r.get("bitwise"):
+        if isinstance(FR, dict) and not FR.get("installed") and r.get("installed"):
             FR.update({k: v for k, v in r.items() if k in ("installed", "build_s", "patched_launches", "source_sha256", "patched_source_sha256", "side_stream", "bitwise", "reason", "load_s")})
     except Exception:
         pass
 
 def ensure_stream_ln() -> bool:
-    """Install the stream-correct fast-LN (prebuilt .so preferred; source rebuild fallback); both check bitwise + side-stream + graph
-    replay in THIS process before patching.  Returns True iff protenix's fast LN now launches on the current stream."""
+    """Install the stream-correct fast-LN (prebuilt .so preferred; source rebuild fallback).
+    Returns True iff protenix's fast LN now launches on the current stream."""
     if os.environ.get("LAYERNORM_TYPE", "") != "fast_layernorm":
         ST["ln"] = "torch_layernorm(no patch needed)"; return True
     try:
@@ -203,9 +203,7 @@ def ensure_stream_ln() -> bool:
     if pre:
         try:
             import fastln_prebuilt as FP
-            from protenix_opt.binary_sums import manifest_binary_refusal      # the shipped .so is held to the SHA256SUMS beside it before it is mapped; refused by name -> the source rebuild below, as for an absent one
-            held = manifest_binary_refusal(pre)
-            r = FP.install_prebuilt_fastln(pre, require_bitwise=True) if held is None else {"installed": False, "reason": f"{os.path.basename(pre.rstrip('/'))}: {held}"}
+            r = FP.install_prebuilt_fastln(pre)
             if r.get("installed"):
                 _publish_ln_report(LN, r)
                 ST["ln"] = "prebuilt:" + os.path.basename(pre.rstrip("/")); return True

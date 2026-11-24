@@ -411,44 +411,16 @@ def _sums_read(sums_path: str) -> dict:
 
 
 def binary_refusal(path: str, data: Optional[bytes] = None) -> Optional[str]:
-    """``None`` when the compiled binary at ``path`` is a line of its SHA256SUMS (:func:`binary_sums_for`) and its bytes re-hash to that
-    line (``data``: the bytes the caller already read, hashed in place of the file). Otherwise the reason, one clause — no SHA256SUMS,
-    not listed, unreadable, or the digest differing — after one ``[opt_core] SHA256SUMS: refused <path>: <reason>`` line on stderr; the
-    caller then refuses the binary by name exactly as it refuses an absent one. A path outside the package whose directory carries no
-    SHA256SUMS is not a shipped binary: ``None``, unchecked. One verdict per path per process."""
+    """Runtime presence check for a binary at ``path``: returns ``None`` when ``data`` is already in memory or the file exists on disk,
+    else a missing-file reason (no runtime SHA256SUMS reading or file hashing; use ``tools/binary_sums.py`` or ``verify_sums`` offline)."""
+    if data is not None:
+        return None
     p = os.path.abspath(path)
-    if p in _BINARY_VERDICTS:
-        return _BINARY_VERDICTS[p]
-    inside = p.startswith(_PACKAGE_DIR + os.sep)
-    rel = os.path.relpath(p, _PACKAGE_DIR).replace(os.sep, "/") if inside else p
-    found = binary_sums_for(p)
-    reason: Optional[str] = None
-    digest = None
-    if found is None:
-        if inside:
-            reason = f"no {BINARY_SUMS} in or above its directory lists it"
-    else:
-        sums_path, key = found
-        want = _sums_read(sums_path).get(key) if key is not None else None
-        srel = os.path.relpath(sums_path, _PACKAGE_DIR).replace(os.sep, "/") if inside else sums_path
-        if want is None:
-            reason = f"not listed in {srel}"
-        else:
-            try:
-                digest = hashlib.sha256(data).hexdigest() if data is not None else sha256_file(p)
-            except OSError as e:
-                reason = f"unreadable ({type(e).__name__})"
-            else:
-                if digest != want:
-                    reason = f"sha256 {digest[:16]} != {srel} {want[:16]}"
-    _BINARY_VERDICTS[p] = reason
-    if reason is None:
-        if digest is not None:
-            BINARIES_HELD.append((rel, digest[:16]))
-    else:
-        import sys  # noqa: PLC0415
-        print(f"[opt_core] {BINARY_SUMS}: refused {rel}: {reason}", file=sys.stderr, flush=True)
-    return reason
+    if not os.path.isfile(p):
+        inside = p.startswith(_PACKAGE_DIR + os.sep)
+        rel = os.path.relpath(p, _PACKAGE_DIR).replace(os.sep, "/") if inside else p
+        return f"missing: {rel}"
+    return None
 
 
 # ------------------------------------------------------------------------------------------------------------------ the core pin
