@@ -51,6 +51,26 @@ def fakepkg(tmp_path, monkeypatch, fresh):
     return pkg
 
 
+def test_runtime_hash_opt_out_still_requires_the_binary_and_sum_entry(fakepkg, monkeypatch):
+    binary = fakepkg / "kernel.so"
+    binary.write_bytes(b"locally prepared")
+    missing = fakepkg / "missing.so"
+    unlisted = fakepkg / "unlisted.so"
+    unlisted.write_bytes(b"unlisted")
+    (fakepkg / "SHA256SUMS").write_text(
+        f"{_sha(b'other')}  {binary.name}\n{_sha(b'other')}  {missing.name}\n"
+    )
+    monkeypatch.setenv("OPT_CORE_VERIFY_PREBUILT", "1")
+    assert gates.binary_refusal(str(binary)).startswith("sha256")
+
+    monkeypatch.setenv("OPT_CORE_VERIFY_PREBUILT", "0")
+    monkeypatch.setattr(gates, "sha256_file", lambda path: pytest.fail(f"Unexpected hash of {path}"))
+    assert gates.binary_refusal(str(binary)) is None
+    assert gates.binary_refusal(str(missing)) == "file not found"
+    assert gates.binary_refusal(str(unlisted)).startswith("not listed")
+    assert gates.BINARIES_HELD == []
+
+
 # ----------------------------------------------------------------------------------------------------------- the tree as shipped
 
 def test_every_shipped_binary_is_a_sha256sums_line_with_its_digest(fresh):

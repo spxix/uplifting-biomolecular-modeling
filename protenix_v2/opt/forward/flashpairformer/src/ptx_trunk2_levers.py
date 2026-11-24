@@ -1225,7 +1225,7 @@ def _apply_blk2():
             from protenix_fpf_triatt_procuda import binding as _PCB
             from protenix_opt.binary_sums import binary_refusal as _binary_refusal   # the shipped sm_90a library is held to the SHA256SUMS beside it before install() maps it; refused by name -> unavailable, as an absent one is
             _so = os.path.join(_PCB.PREBUILT_DIR, _PCB.SO_NAME)
-            _held = _binary_refusal(_so) if os.environ.get("OPT_CORE_VERIFY_PREBUILT") != "0" and os.path.isfile(_so) else None                  # an absent binary is install()'s own by-name refusal
+            _held = _binary_refusal(_so) if os.path.isfile(_so) else None                  # an absent binary is install()'s own by-name refusal
             if _held is not None:
                 raise RuntimeError(f"protenix_fpf_triatt_procuda: prebuilt binary {_PCB.SO_NAME} refused: {_held}")
             _PC.install(verbose=True)
@@ -1393,7 +1393,7 @@ def apply_from_env():
         _apply_blk()
     elif os.environ.get("PTX_BLK", "") == "2":
         _apply_blk2()
-    if os.environ.get("OPT_CORE_VERIFY_PREBUILT") != "0" and os.environ.get("PTX_DEADSKIP", ""):
+    if os.environ.get("PTX_DEADSKIP", ""):
         _apply_deadskip(os.environ["PTX_DEADSKIP"])
     if os.environ.get("PTX_PWA_ZCACHE", "") == "1":
         try:
@@ -1507,6 +1507,9 @@ def _apply_deadskip(manifest_path):
         import runner.inference as RI
     except Exception as e:
         _STATS["applied"].append(f"DEADSKIP:unavailable({e!r})"); return
+    from opt_core.gates import verify_prebuilt
+
+    verify_checkpoint = verify_prebuilt()
     man = json.load(open(manifest_path))
     _orig_load = RI.InferenceRunner.load_checkpoint          # hook AFTER the weights are loaded (init_model builds a randomly initialised model; the absmax guard refuses everything there)
     def init_model(self):
@@ -1514,7 +1517,7 @@ def _apply_deadskip(manifest_path):
         ckpt = os.path.join(self.configs.load_checkpoint_dir, f"{self.configs.model_name}.pt")
         if not os.path.exists(ckpt):
             ckpt = man.get("checkpoint_path")
-        skipped = _DS.install(self.model, man, ckpt, reprobe=True)
+        skipped = _DS.install(self.model, man, ckpt if verify_checkpoint else None, reprobe=True)
         mods = dict(self.model.named_modules())
         n_tm = 0
         for pth in skipped:
@@ -1530,7 +1533,8 @@ def _apply_deadskip(manifest_path):
         on_stock = sorted(set(expected) - set(skipped))
         _rep = getattr(_DS.install, "last_report", None) or []
         reasons = {r["path"]: r.get("reason", "?").split(" ")[0] for r in _rep if r.get("action") == "STOCK"} or {p: "?" for p in on_stock}
-        msg = (f"deadskip: {len(skipped)}/{len(expected)} modules skipped (ckpt sha ok; per-module live re-probe exactly 0 on this process{'; trimul inplace-safe: %d' % n_tm}); "
+        hash_note = "checkpoint SHA checked" if verify_checkpoint else "checkpoint SHA skipped"
+        msg = (f"deadskip: {len(skipped)}/{len(expected)} modules skipped ({hash_note}; per-module live re-probe exactly 0 on this process{'; trimul inplace-safe: %d' % n_tm}); "
                f"on stock: {reasons if on_stock else 'none'}")
         _STATS["deadskip"] = {"n": len(skipped), "n_expected": len(expected), "on_stock": on_stock, "n_trimul_inplace_safe": n_tm, "manifest_n": len(man["modules"]), "msg": msg,
                               "gpu_arch": gpu_arch()}

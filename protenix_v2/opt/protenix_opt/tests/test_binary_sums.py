@@ -6,10 +6,16 @@ prologue library of third_party/protenix_fpf_triatt_procuda/prebuilt/) is a ``<s
 directory, digest equal; a binary whose line is zeroed, that is unlisted, or that has no SHA256SUMS beside it is refused by name on
 stderr in the core's wording and nothing is loaded — the two load sites (fpf_stackgraph.ensure_stream_ln, ptx_trunk2_levers' prologue
 lever) ask for the verdict before they reach the loader."""
+import ast
 import hashlib
+import importlib.util
+import json
 import os
 import re
 import shutil
+import sys
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 
 import pytest
 
@@ -171,3 +177,85 @@ def test_both_load_sites_ask_for_the_verdict_before_the_loader():
     lv = open(os.path.join(KIT_HOME, "src", "ptx_trunk2_levers.py"), encoding="utf-8").read()
     a, b = lv.index("_binary_refusal(_so)"), lv.index("_PC.install(verbose=True)")
     assert 0 < a < b
+
+
+@pytest.mark.parametrize("updates, omitted, field", [
+    ({"source_sha256": {}}, None, "source_sha256"),
+    ({"source_sha256": []}, None, "source_sha256"),
+    ({}, "source_sha256", "source_sha256"),
+    ({}, "so_sha256", "so_sha256"),
+])
+def test_fastln_hash_opt_out_preserves_manifest_fields(tmp_path, monkeypatch, updates, omitted, field):
+    source = Path(KIT_HOME) / "third_party/fastln_prebuilt.py"
+    spec = importlib.util.spec_from_file_location("fastln_prebuilt", source)
+    fastln = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fastln)
+    for name in ("protenix", "protenix.model", "protenix.model.layer_norm", "protenix.model.layer_norm.layer_norm",
+                 "infopt_graphs", "infopt_graphs.protenix", "infopt_graphs.protenix.fastln_stream"):
+        module = ModuleType(name)
+        module.__path__ = []
+        monkeypatch.setitem(sys.modules, name, module)
+        parent, _, child = name.rpartition(".")
+        if parent:
+            setattr(sys.modules[parent], child, module)
+    monkeypatch.setenv("OPT_CORE_VERIFY_PREBUILT", "0")
+    monkeypatch.setenv("INFOPT_FASTLN_STREAM", "1")
+    monkeypatch.setattr(fastln, "_sha", lambda *_: pytest.fail("hashed the binary"))
+    monkeypatch.setattr(fastln, "_kernel_source_shas", lambda: pytest.fail("hashed the source tree"))
+    manifest = {
+        "torch": fastln.torch.__version__, "cuda": fastln.torch.version.cuda, "so": "kernel.so",
+        "so_sha256": "build-digest", "source_sha256": {"layer_norm_cuda.cpp": "build-digest"},
+    }
+    manifest.update(updates)
+    manifest.pop(omitted, None)
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    (tmp_path / "kernel.so").touch()
+
+    report = fastln.install_prebuilt_fastln(str(tmp_path))
+    assert not report["installed"] and field in report["reason"]
+
+
+@pytest.mark.parametrize("verify_hashes", [True, False])
+def test_deadskip_still_requests_a_live_reprobe_when_skipping_checkpoint_hash(
+    tmp_path, monkeypatch, capsys, verify_hashes
+):
+    source = Path(KIT_HOME) / "src/ptx_trunk2_levers.py"
+    tree = ast.parse(source.read_text())
+    function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_apply_deadskip")
+    scope = {"os": os, "_STATS": {"applied": []}, "gpu_arch": lambda: "sm90"}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"), scope)
+
+    class Runner:
+        def load_checkpoint(self):
+            calls.append("load")
+
+    calls = []
+    deadskip = ModuleType("deadskip")
+
+    def install(model, manifest, checkpoint, *, reprobe):
+        calls.append((checkpoint, reprobe))
+        return ["dead_cell"]
+
+    deadskip.install = install
+    runner_package = ModuleType("runner")
+    runner_package.inference = ModuleType("runner.inference")
+    runner_package.inference.InferenceRunner = Runner
+    monkeypatch.setitem(sys.modules, "runner", runner_package)
+    monkeypatch.setitem(sys.modules, "runner.inference", runner_package.inference)
+    monkeypatch.setitem(sys.modules, "deadskip", deadskip)
+    monkeypatch.setenv("OPT_CORE_VERIFY_PREBUILT", "1" if verify_hashes else "0")
+    manifest = tmp_path / "deadskip.json"
+    manifest.write_text(json.dumps({"modules": [{"path": "dead_cell", "probe_pass": True}]}))
+    checkpoint = tmp_path / "model.pt"
+    checkpoint.touch()
+    runner = Runner()
+    runner.configs = SimpleNamespace(load_checkpoint_dir=tmp_path, model_name="model")
+    cell = SimpleNamespace()
+    runner.model = SimpleNamespace(named_modules=lambda: [("dead_cell", cell)])
+
+    scope["_apply_deadskip"](manifest)
+    runner.load_checkpoint()
+
+    assert calls == ["load", (str(checkpoint) if verify_hashes else None, True)]
+    assert cell._deadskip
+    assert ("checkpoint SHA checked" if verify_hashes else "checkpoint SHA skipped") in capsys.readouterr().out

@@ -1081,75 +1081,22 @@ def atom_attention(q, k, v, bias, gate=None, *, word=None, selection=None, n_que
 _ATOM_EXACT = {"routes": None, "loadcheck": None, "seconds": None, "refused": None}
 
 
-def export_atom_exact_routes(path, device=None):
-    """Prepare the matmul route table for this runtime and GPU during deployment."""
-    import json
-    import torch
-
-    kernel = carried_module("atom_exact")
-    device = device if device is not None else torch.device("cuda", torch.cuda.current_device())
-    precision = torch.get_float32_matmul_precision()
-    state = {key: kernel.STATE[key] for key in ("routes_qk", "routes_pv", "routes_done")}
-    routes = {}
-    try:
-        for name, tf32 in (("ieee", False), ("tf32", True)):
-            torch.backends.cuda.matmul.allow_tf32 = tf32
-            kernel.STATE.update(routes_qk={}, routes_pv={}, routes_done=False)
-            bad = kernel.determine_routes(device)
-            routes[name] = {
-                "qk": kernel.STATE["routes_qk"],
-                "pv": kernel.STATE["routes_pv"],
-                "unreproducible": bool(bad),
-            }
-    finally:
-        torch.set_float32_matmul_precision(precision)
-        kernel.STATE.update(state)
-    with open(path, "w", encoding="utf-8") as stream:
-        json.dump(routes, stream)
-
-
-def _load_atom_exact_routes(kernel, tf32):
-    import json
-    import os
-
-    path = os.environ.get("OPT_CORE_ATOM_ROUTES") or os.path.join(os.environ["UNIFOLD_NATIVE_DIR"], "atom_routes.json")
-    with open(path, encoding="utf-8") as stream:
-        routes = json.load(stream)["tf32" if tf32 else "ieee"]
-    kernel.STATE.update(
-        routes_qk={int(batch): kind for batch, kind in routes["qk"].items()},
-        routes_pv={int(batch): kind for batch, kind in routes["pv"].items()},
-        routes_done=True,
-    )
-    return routes["unreproducible"]
-
-
 def atom_exact_ready(device=None):
     """Per process, before the first launch of row ``atom_exact``: determine which cuBLAS numerics the statement's chunked GEMMs use here
     (the carried kernel's route table; ~1 s, torch.matmul on the exact shapes) and check the carried load-check vectors' output digests.
     Returns the carried kernel module; raises Refusal by name (routes_unreproducible | loadcheck:<case>) with fallback sdpa_gather."""
     import hashlib, json as _json, os, time, torch
-    from opt_core.gates import verify_prebuilt
-
-    verify = verify_prebuilt()
     K = carried_module("atom_exact")
     if _ATOM_EXACT["refused"]:
         raise Refusal(_ATOM_EXACT["refused"], "atom_exact", "sdpa_gather")
     if _ATOM_EXACT["routes"] is not None:
         return K
     t0 = time.time()
-    tf32 = torch.backends.cuda.matmul.allow_tf32
-    if verify:
-        dev = device if device is not None else torch.device("cuda", torch.cuda.current_device())
-        bad = K.determine_routes(dev)
-    else:
-        bad = _load_atom_exact_routes(K, tf32)
+    dev = device if device is not None else torch.device("cuda", torch.cuda.current_device())
+    bad = K.determine_routes(dev)                                              # under the process's matmul precision state (the trunks run TF32 matmuls at inference)
     if bad:                                                                     # a reachable chunk batch count whose cuBLAS numerics no variant reproduces: named, never guessed
         _ATOM_EXACT["refused"] = "routes_unreproducible(tf32=%s;%s)" % (bool(torch.backends.cuda.matmul.allow_tf32), K.route_summary().replace(" ", ""))
         raise Refusal(_ATOM_EXACT["refused"], "atom_exact", "sdpa_gather")
-    if not verify:
-        _ATOM_EXACT["routes"] = K.route_summary()
-        _ATOM_EXACT["seconds"] = round(time.time() - t0, 2)
-        return K
     spec = _json.load(open(os.path.join(os.path.dirname(os.path.abspath(K.__file__)), "vectors.json")))
     def _original(*a, **kw):                                                    # the load-check vectors sit inside the kernel's envelope: never reached
         raise Refusal("loadcheck:envelope_miss", "atom_exact", "sdpa_gather")

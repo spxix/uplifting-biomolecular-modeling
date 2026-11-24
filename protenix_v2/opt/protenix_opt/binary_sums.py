@@ -28,14 +28,15 @@ def binary_refusal(path: str) -> Optional[str]:
     clause), after one refusal line on stderr in the core's format. Unlike a file outside any package, a kit binary with no SHA256SUMS
     in its directory is refused too: every binary this kit ships has one."""
     p = os.path.abspath(path)
-    if p in _VERDICTS:
-        return _VERDICTS[p]
+    verdict_key = p if _gates.verify_prebuilt() else (p, False)
+    if verdict_key in _VERDICTS:
+        return _VERDICTS[verdict_key]
     if os.path.isfile(os.path.join(os.path.dirname(p), SUMS)):
         why = _gates.binary_refusal(p)          # listed and equal -> None (held); unlisted / altered / unreadable -> the reason, printed by name by the core
     else:
         why = f"no {SUMS} in its directory"
         print(f"[opt_core] {SUMS}: refused {p}: {why}", file=sys.stderr, flush=True)
-    _VERDICTS[p] = why
+    _VERDICTS[verdict_key] = why
     return why
 
 

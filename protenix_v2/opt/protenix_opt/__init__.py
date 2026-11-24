@@ -34,9 +34,7 @@ def _refuse_without_core() -> None:
     import sys
     from . import _core
     _core.gate()
-    import os
-
-    why = _core.producer_refusal() if os.environ.get("OPT_CORE_VERIFY_PREBUILT") != "0" else None
+    why = _core.producer_refusal()
     if why:
         sys.stderr.write(f"[protenix-opt] NOT ACTIVE: {why}\n"); sys.stderr.flush()
         raise SystemExit(3)

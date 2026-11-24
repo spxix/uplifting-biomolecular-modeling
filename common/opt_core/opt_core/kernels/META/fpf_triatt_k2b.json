@@ -11,6 +11,7 @@
  "license": "Apache-2.0 (this repository's own code: common/opt_core/LICENSE); portions derive from Protenix (Apache-2.0, Copyright 2024 ByteDance and/or its affiliates): NOTICE in the package directory, licence text kernels/fpf_flashpairformer.PROTENIX_LICENSE",
  "mechanism": "attn.triangle_attention (core kernel; cuequivariance triangle_attention call convention)",
  "name": "fpf_triatt_k2b",
+ "required_files": ["K2B_CELLS.json", "_engine_adapter.py", "flash_triattn_k2.py", "triatt_k2b.py"],
  "not_carried": {},
  "runtime_imports": [],
  "runtime_imports_note": "__init__.py inserts its own directory on sys.path and imports triatt_k2b / flash_triattn_k2 as top-level modules (the kit's loader, carried as-is); fn / fn_k2 (registry ops) are same-signature wrappers in __init__.py over _engine_adapter.py, imported on first call, whose bodies import the engine's upstream package lazily inside the call; the core's serve layer calls attn_k2b (= triatt_k2b.flash_triangle_attention) only flash_triattn_k2.py: the cached-launch and launch-check handlers of _launch_generic import opt_core.oom.is_oom (standard library) and re-raise an out-of-memory instead of disabling the fast launch path; kernel statements unchanged.",

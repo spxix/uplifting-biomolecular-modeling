@@ -4,7 +4,6 @@ import hashlib
 import json
 import os
 import re
-from types import SimpleNamespace
 
 import pytest
 
@@ -106,29 +105,3 @@ def test_abi_key_word():
     pytest.importorskip("torch")
     key = T.flash_abi_key()
     assert key.startswith("torch") and key.endswith("-sm90") and "cpython-3" in key, key
-
-
-@pytest.mark.parametrize("verify", ["1", "0"])
-def test_flash_loader_keeps_loading_and_skips_verification_only_on_opt_out(monkeypatch, verify):
-    calls = []
-    result = object()
-    carrier = SimpleNamespace(load=lambda: calls.append("load") or result)
-    monkeypatch.setenv("OPT_CORE_VERIFY_PREBUILT", verify)
-    monkeypatch.setattr(T, "carried_module", lambda name: carrier)
-    monkeypatch.setattr(T, "_PRIMED_ROWS", set())
-    monkeypatch.setattr(T, "_sealed_prebuilt_refusal", lambda carrier: calls.append("verify"))
-    assert T._flash_ext() is result
-    assert calls == (["verify", "load"] if verify == "1" else ["load"])
-
-
-def test_flash_loader_reports_a_missing_binary_with_verification_disabled(monkeypatch):
-    def fail():
-        raise ImportError("extension is absent")
-
-    monkeypatch.setenv("OPT_CORE_VERIFY_PREBUILT", "0")
-    monkeypatch.setattr(T, "carried_module", lambda name: SimpleNamespace(load=fail))
-    monkeypatch.setattr(T, "_PRIMED_ROWS", set())
-    monkeypatch.setattr(T, "_FLASH_EXT", {})
-    monkeypatch.setattr(T, "flash_store_manifest", lambda: {})
-    with pytest.raises(RuntimeError, match="extension is absent"):
-        T._flash_ext()

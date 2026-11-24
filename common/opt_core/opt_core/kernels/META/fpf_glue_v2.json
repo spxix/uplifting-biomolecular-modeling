@@ -4,6 +4,7 @@
  "license": "Apache-2.0 (this repository's own code: common/opt_core/LICENSE); portions derive from Protenix (Apache-2.0, Copyright 2024 ByteDance and/or its affiliates): NOTICE in the package directory, licence text kernels/fpf_flashpairformer.PROTENIX_LICENSE",
  "mechanism": "attn.triangle_attention_prologue+epilogue, pair.transition_swiglu (kernel variants prologue_v4 / prologue_v4_padded / epilogue_v3 / transition_v3 warp-specialized; torch.equal to the fpf_triatt_pro / fpf_triatt_epi / fpf_transition kernels on their pinned cells)",
  "name": "fpf_glue_v2",
+ "required_files": ["GLUE_CELLS.json", "kernels.py"],
  "not_carried": {
   "design_notes/CELLS_FRAGMENT_glue_sm100_v1.json": "not in the package tree (design notes and prototypes, not included in this package: nothing imports or reads them at run time)",
   "design_notes/CHANGELOG.md": "not in the package tree (design notes and prototypes, not included in this package: nothing imports or reads them at run time)",

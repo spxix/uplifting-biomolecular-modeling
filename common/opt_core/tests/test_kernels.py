@@ -176,6 +176,29 @@ def test_route_refuses_a_differing_single_module(tmp_path):
     assert not g.ok and g.details["differing"] == ["flash_triattn.py"]
 
 
+def test_hash_opt_out_still_requires_import_entry_and_alternate_runtime_files(tmp_path, monkeypatch):
+    name = "fpf_glue_v2"
+    alternate = tmp_path / name
+    alternate.mkdir()
+    entry = alternate / "__init__.py"
+    stub = types.ModuleType(name)
+    stub.__file__ = str(entry)
+    monkeypatch.setitem(sys.modules, name, stub)
+    monkeypatch.setenv("OPT_CORE_VERIFY_PREBUILT", "0")
+    monkeypatch.setattr(kernels, "_live_files", lambda *_: pytest.fail("walked the carried tree"))
+
+    result = kernels.route_check(name)
+    assert not result.ok and "not importable" in result.reason
+
+    entry.write_text("# different from the core copy")
+    (alternate / "GLUE_CELLS.json").write_text("{}")
+    result = kernels.route_check(name)
+    assert not result.ok and result.details["missing"] == ["kernels.py"]
+
+    (alternate / "kernels.py").write_text("# different from the core copy")
+    assert kernels.route_check(name).ok
+
+
 def test_already_imported_copy_answers_with_its_own_location(tmp_path, monkeypatch):
     identical = tmp_path / "fpf_trimul"
     shutil.copytree(kernels.carried_path("fpf_trimul"), identical, ignore=shutil.ignore_patterns("__pycache__"))

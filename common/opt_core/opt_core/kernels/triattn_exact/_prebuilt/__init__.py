@@ -142,8 +142,6 @@ def source_fingerprint(route):
 
 def manifest():
     """The parsed manifest (re-read when the file changes).  Missing file -> empty manifest; unreadable file -> Refused."""
-    if os.environ.get("OPT_CORE_VERIFY_PREBUILT") == "0" and _manifest_cache["doc"] is not None:
-        return _manifest_cache["doc"]
     try:
         mt = os.stat(MANIFEST_PATH).st_mtime_ns
     except OSError:

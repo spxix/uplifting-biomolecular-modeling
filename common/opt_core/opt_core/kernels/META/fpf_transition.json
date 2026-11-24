@@ -4,6 +4,7 @@
  "license": "Apache-2.0 (this repository's own code: common/opt_core/LICENSE); portions derive from Protenix (Apache-2.0, Copyright 2024 ByteDance and/or its affiliates): NOTICE in the package directory, licence text kernels/fpf_flashpairformer.PROTENIX_LICENSE",
  "mechanism": "pair.transition_swiglu",
  "name": "fpf_transition",
+ "required_files": ["transition.py"],
  "not_carried": {},
  "runtime_imports": [],
  "runtime_imports_note": "none at import; fn*/post_ln take the engine's Transition module (attribute names layernorm1, linear_no_bias_a, linear_no_bias_b, linear_no_bias, c_in); the core's serve layer builds the same cache schema from canonical weight keys and calls _launch/_fused_transition_kernel",

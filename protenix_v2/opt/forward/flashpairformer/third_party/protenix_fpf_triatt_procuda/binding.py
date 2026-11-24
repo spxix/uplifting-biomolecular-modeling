@@ -39,10 +39,12 @@ def load():
     if _LIB is not None:
         return _LIB
     so = os.path.join(PREBUILT_DIR, SO_NAME)
+    if not os.path.exists(so):
+        raise RuntimeError(f"prebuilt binary missing: {so}")
+    man = manifest()
+    if not os.path.isfile(os.path.join(_HERE, "csrc", "triatt_procuda_sm90.cu")):
+        raise RuntimeError("prebuilt source missing: csrc/triatt_procuda_sm90.cu")
     if os.environ.get("OPT_CORE_VERIFY_PREBUILT") != "0":
-        if not os.path.exists(so):
-            raise RuntimeError(f"prebuilt binary missing: {so}")
-        man = manifest()
         got = _sha256(so)
         if got != man.get("so_sha256"):
             raise RuntimeError(f"prebuilt binary sha256 {got[:16]} != manifest {str(man.get('so_sha256'))[:16]}")

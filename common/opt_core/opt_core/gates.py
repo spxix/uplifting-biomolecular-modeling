@@ -43,7 +43,7 @@ from typing import Callable, Iterable, Mapping, Optional, Sequence, Tuple
 
 
 def verify_prebuilt() -> bool:
-    """Whether to repeat prebuilt artifact verification in the running process."""
+    """Whether to check file hashes and sizes for prepared runtime artifacts."""
     return os.environ.get("OPT_CORE_VERIFY_PREBUILT") != "0"
 
 
@@ -420,10 +420,13 @@ def binary_refusal(path: str, data: Optional[bytes] = None) -> Optional[str]:
     line (``data``: the bytes the caller already read, hashed in place of the file). Otherwise the reason, one clause — no SHA256SUMS,
     not listed, unreadable, or the digest differing — after one ``[opt_core] SHA256SUMS: refused <path>: <reason>`` line on stderr; the
     caller then refuses the binary by name exactly as it refuses an absent one. A path outside the package whose directory carries no
-    SHA256SUMS is not a shipped binary: ``None``, unchecked. One verdict per path per process."""
+    SHA256SUMS is not a shipped binary: ``None``, unchecked. The prepared runtime can skip the digest while retaining the file
+    and manifest-entry checks. One verdict per path and verification mode."""
     p = os.path.abspath(path)
-    if p in _BINARY_VERDICTS:
-        return _BINARY_VERDICTS[p]
+    verify_hashes = verify_prebuilt()
+    verdict_key = p if verify_hashes else (p, False)
+    if verdict_key in _BINARY_VERDICTS:
+        return _BINARY_VERDICTS[verdict_key]
     inside = p.startswith(_PACKAGE_DIR + os.sep)
     rel = os.path.relpath(p, _PACKAGE_DIR).replace(os.sep, "/") if inside else p
     found = binary_sums_for(p)
@@ -438,6 +441,9 @@ def binary_refusal(path: str, data: Optional[bytes] = None) -> Optional[str]:
         srel = os.path.relpath(sums_path, _PACKAGE_DIR).replace(os.sep, "/") if inside else sums_path
         if want is None:
             reason = f"not listed in {srel}"
+        elif not verify_hashes:
+            if data is None and not os.path.isfile(p):
+                reason = "file not found"
         else:
             try:
                 digest = hashlib.sha256(data).hexdigest() if data is not None else sha256_file(p)
@@ -446,7 +452,7 @@ def binary_refusal(path: str, data: Optional[bytes] = None) -> Optional[str]:
             else:
                 if digest != want:
                     reason = f"sha256 {digest[:16]} != {srel} {want[:16]}"
-    _BINARY_VERDICTS[p] = reason
+    _BINARY_VERDICTS[verdict_key] = reason
     if reason is None:
         if digest is not None:
             BINARIES_HELD.append((rel, digest[:16]))

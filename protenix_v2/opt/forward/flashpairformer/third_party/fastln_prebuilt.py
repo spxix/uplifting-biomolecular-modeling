@@ -78,13 +78,8 @@ def install_prebuilt_fastln(pre_dir: str, require_bitwise: bool = True) -> Dict[
     if os.environ.get("INFOPT_FASTLN_STREAM", "1") in ("0", "false", "off"):
         rep["reason"] = "INFOPT_FASTLN_STREAM=0"; return rep
     import protenix.model.layer_norm.layer_norm as LN
-    verify = os.environ.get("OPT_CORE_VERIFY_PREBUILT") != "0"
-    if verify:
-        from infopt_graphs.protenix import fastln_stream as FS
+    from infopt_graphs.protenix import fastln_stream as FS
     if getattr(LN, "_infopt_stream_patched", False):
-        if not verify:
-            rep.update(getattr(LN, "_infopt_fastln_report", {}))
-            rep.update(installed=True, reason="already installed"); return rep
         # v0.3.1 composition fix (small-N job bba530a4): a SECOND caller in the same process (e.g. the kit worker after fpf_stackgraph installed us first) must
         # receive the checking fields of the FIRST install (bitwise / side_stream / shas), not a bare "already installed" — the worker guard refuses to run
         # graphs unless bitwise.all_bitwise_equal is present and True.  If the patch was applied by the SOURCE-REBUILD path (infopt_graphs FASTLN_REPORT), use that.
@@ -107,23 +102,33 @@ def install_prebuilt_fastln(pre_dir: str, require_bitwise: bool = True) -> Dict[
         except Exception as e:  # noqa
             rep.update(installed=True, reason=f"already installed (the re-check raised: {e!r})"); return rep
     mp = os.path.join(pre_dir, "manifest.json")
-    try:
-        with open(mp) as stream:
-            man = json.load(stream)
-    except FileNotFoundError:
+    if not os.path.exists(mp):
         rep["reason"] = f"no manifest at {mp}"; return rep
+    man = json.load(open(mp))
     rep["manifest"] = {k: man.get(k) for k in ("so", "so_sha256", "torch", "cuda", "image", "gpu", "built_utc", "build_s", "patched_launches")}
     so = os.path.join(pre_dir, man["so"])
-    if verify:
-        checks: Dict[str, bool] = {"so_exists": os.path.exists(so)}
-        if checks["so_exists"]:
-            checks["so_sha256"] = _sha(so) == man["so_sha256"]
-        checks["torch_version"] = torch.__version__ == man["torch"]
-        checks["cuda_version"] = torch.version.cuda == man["cuda"]
-        checks["kernel_sources_sha256"] = _kernel_source_shas() == man["source_sha256"]
-        rep["checks"] = checks
-        if not all(checks.values()):
-            rep["reason"] = "prebuilt checks failed: " + json.dumps(checks); return rep
+    so_sha = man.get("so_sha256")
+    source_shas = man.get("source_sha256")
+    if not isinstance(so_sha, str) or not so_sha:
+        rep["reason"] = "manifest must contain so_sha256"; return rep
+    if not isinstance(source_shas, dict) or not source_shas:
+        rep["reason"] = "manifest must contain a non-empty source_sha256 mapping"; return rep
+    checks: Dict[str, bool] = {"so_exists": os.path.exists(so)}
+    verify_hashes = os.environ.get("OPT_CORE_VERIFY_PREBUILT") != "0"
+    if checks["so_exists"] and verify_hashes:
+        checks["so_sha256"] = _sha(so) == so_sha
+    checks["torch_version"] = torch.__version__ == man["torch"]
+    checks["cuda_version"] = torch.version.cuda == man["cuda"]
+    if verify_hashes:
+        checks["kernel_sources_sha256"] = _kernel_source_shas() == source_shas
+    else:
+        kernel_dir = os.path.join(os.path.dirname(LN.__file__), "kernel")
+        checks["kernel_sources_exist"] = all(
+            os.path.isfile(os.path.join(kernel_dir, fn)) for fn in source_shas
+        )
+    rep["checks"] = checks
+    if not all(checks.values()):
+        rep["reason"] = "prebuilt checks failed: " + json.dumps(checks); return rep
     name = man.get("module_name", "fast_layer_norm_cuda_v2_stream")
     try:
         loader = importlib.machinery.ExtensionFileLoader(name, so)
@@ -133,23 +138,21 @@ def install_prebuilt_fastln(pre_dir: str, require_bitwise: bool = True) -> Dict[
     except Exception as e:  # noqa
         rep["reason"] = f"load failed: {e!r}"; return rep
     orig = LN.fast_layer_norm_cuda_v2
-    if verify:
-        missing = [s for s in dir(orig) if not s.startswith("_") and not hasattr(mod, s)]
-        checks["symbols"] = not missing
-        if missing:
-            rep["reason"] = f"missing symbols: {missing}"; return rep
-        rep["bitwise"] = FS.verify_bitwise(orig, mod)
-        rep["side_stream"] = FS.verify_side_stream(mod)
-        rep["source_sha256"] = man["source_sha256"]; rep["patched_source_sha256"] = man["patched_source_sha256"]; rep["patched_launches"] = man["patched_launches"]
-        rep["build_s"] = 0.0; rep["load_s"] = round(time.time() - t0, 2)
-        ok = rep["bitwise"]["all_bitwise_equal"] and rep["side_stream"]["side_stream_equal"] and rep["side_stream"]["graph_replay_equal"] and rep["side_stream"]["graph_replay_finite"]
-        if require_bitwise and not ok:
-            rep["reason"] = f"load checks failed in this process: bitwise={rep['bitwise']['all_bitwise_equal']} side_stream={rep['side_stream']}"; return rep
+    missing = [s for s in dir(orig) if not s.startswith("_") and not hasattr(mod, s)]
+    checks["symbols"] = not missing
+    if missing:
+        rep["reason"] = f"missing symbols: {missing}"; return rep
+    rep["bitwise"] = FS.verify_bitwise(orig, mod)
+    rep["side_stream"] = FS.verify_side_stream(mod)
+    rep["source_sha256"] = man["source_sha256"]; rep["patched_source_sha256"] = man["patched_source_sha256"]; rep["patched_launches"] = man["patched_launches"]
+    rep["build_s"] = 0.0; rep["load_s"] = round(time.time() - t0, 2)
+    ok = rep["bitwise"]["all_bitwise_equal"] and rep["side_stream"]["side_stream_equal"] and rep["side_stream"]["graph_replay_equal"] and rep["side_stream"]["graph_replay_finite"]
+    if require_bitwise and not ok:
+        rep["reason"] = f"load checks failed in this process: bitwise={rep['bitwise']['all_bitwise_equal']} side_stream={rep['side_stream']}"; return rep
     LN.fast_layer_norm_cuda_v2 = mod
     LN._infopt_stream_patched = True
     LN._infopt_fastln_orig = orig
-    rep["installed"] = True
-    rep["reason"] = "prebuilt .so loaded and checked (bitwise + side-stream + graph replay)" if verify else "prepared .so loaded"
+    rep["installed"] = True; rep["reason"] = "prebuilt .so loaded and checked (bitwise + side-stream + graph replay)"
     LN._infopt_fastln_report = dict(rep)          # v0.3.1: cached for later callers in this process (see the "already installed" branch)
     try:                                          # and mirror into the partner kit's FASTLN_REPORT so its worker guard sees the same fields whichever component installed first
         from infopt_graphs.protenix import FASTLN_REPORT as _FR

@@ -95,46 +95,48 @@ def load_prebuilt(key: Optional[str] = None):
     global _MOD
     if _MOD is not None:
         return _MOD
-    from opt_core.gates import verify_prebuilt
-
-    verify = verify_prebuilt()
-    if verify:
-        if not torch.cuda.is_available():
-            raise RuntimeError(f"{NAME}: no CUDA device")
-        cc = torch.cuda.get_device_capability()
+    if not torch.cuda.is_available():
+        raise RuntimeError(f"{NAME}: no CUDA device")
+    cc = torch.cuda.get_device_capability()
     pdir = prebuilt_dir(key)
     mpath = os.path.join(pdir, "manifest.json")
     if not os.path.isfile(mpath):
         raise RuntimeError(f"{NAME}: no prebuilt for stack {stack_key()} (expected {mpath})")
     man = json.load(open(mpath))
+    if f"sm{cc[0]}{cc[1]}" not in man.get("arch", []):
+        raise RuntimeError(f"{NAME}: device cc {cc} not in the prebuilt arch list {man.get('arch')}")
+    if man.get("torch") != torch.__version__ or man.get("cuda") != torch.version.cuda:
+        raise RuntimeError(f"{NAME}: prebuilt built for torch {man.get('torch')} / cuda {man.get('cuda')}, running torch {torch.__version__} / cuda {torch.version.cuda}")
     so = os.path.join(pdir, man["so"])
-    if verify:
-        if f"sm{cc[0]}{cc[1]}" not in man.get("arch", []):
-            raise RuntimeError(f"{NAME}: device cc {cc} not in the prebuilt arch list {man.get('arch')}")
-        if man.get("torch") != torch.__version__ or man.get("cuda") != torch.version.cuda:
-            raise RuntimeError(f"{NAME}: prebuilt built for torch {man.get('torch')} / cuda {man.get('cuda')}, running torch {torch.__version__} / cuda {torch.version.cuda}")
-        from opt_core.gates import binary_refusal  # noqa: PLC0415
-        why = binary_refusal(so)
-        if why:
-            raise RuntimeError(f"{NAME}: {man['so']} refused: {why}")
-        if _sha_file(so) != man["so_sha256"]:
+    so_sha = man.get("so_sha256")
+    source_shas = man.get("source_sha256")
+    if not isinstance(so_sha, str) or not so_sha:
+        raise RuntimeError(f"{NAME}: manifest must contain so_sha256")
+    if not isinstance(source_shas, dict) or not source_shas:
+        raise RuntimeError(f"{NAME}: manifest must contain a non-empty source_sha256 mapping")
+    from opt_core.gates import binary_refusal, verify_prebuilt  # noqa: PLC0415
+    why = binary_refusal(so)
+    if why:
+        raise RuntimeError(f"{NAME}: {man['so']} refused: {why}")
+    if verify_prebuilt():
+        if _sha_file(so) != so_sha:
             raise RuntimeError(f"{NAME}: sha256 of {man['so']} does not match the manifest")
-        if source_sha256() != man["source_sha256"]:
+        if source_sha256() != source_shas:
             raise RuntimeError(f"{NAME}: csrc/ sha256 does not match the manifest (the .so was built from different sources)")
+    elif not all(os.path.isfile(os.path.join(HERE, "csrc", fn)) for fn in source_shas):
+        raise RuntimeError(f"{NAME}: csrc/ is missing a source listed in the manifest")
     loader = importlib.machinery.ExtensionFileLoader(man["module_name"], so)
     spec = importlib.util.spec_from_file_location(man["module_name"], so, loader=loader)
     mod = importlib.util.module_from_spec(spec); loader.exec_module(mod)
-    if verify:
-        if str(getattr(mod, "version", "")) != str(man.get("kernel_version")):
-            raise RuntimeError(f"{NAME}: loaded module version {getattr(mod, 'version', None)} != manifest {man.get('kernel_version')}")
+    if str(getattr(mod, "version", "")) != str(man.get("kernel_version")):
+        raise RuntimeError(f"{NAME}: loaded module version {getattr(mod, 'version', None)} != manifest {man.get('kernel_version')}")
     mod.init()
-    if verify:
-        sc = run_loadcheck(mod, man)
-        STATS["loadcheck"] = sc
-        if not sc["bit_equal_vs_sdpa"]:
-            raise RuntimeError(f"{NAME}: load-time load-time check: output not bit-identical to torch SDPA in this process ({sc})")
-        if sc["digest_match"] is False:
-            raise RuntimeError(f"{NAME}: load-time load-time check: output digests differ from the manifest ({sc})")
+    sc = run_loadcheck(mod, man)
+    STATS["loadcheck"] = sc
+    if not sc["bit_equal_vs_sdpa"]:
+        raise RuntimeError(f"{NAME}: load-time load-time check: output not bit-identical to torch SDPA in this process ({sc})")
+    if sc["digest_match"] is False:
+        raise RuntimeError(f"{NAME}: load-time load-time check: output digests differ from the manifest ({sc})")
     mod._dit_manifest = man
     _MOD = mod
     return mod
